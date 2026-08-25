@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.1.2 - 2026-08-25
+
+- Update the complete DeepSeek Harness development and runtime contract set from `0.1.0-rc.6` to `0.1.1-rc.2`.
+- Add a real-package compatibility test that installs the release tarball through the current `dsh plugin` command, verifies bundle/profile composition, and boots DSH Web to HTTP readiness.
+- Add an explicit pnpm build-script allowlist for the reviewed native dependencies required by the latest official DSH package.
+- Keep the Windows local-path workaround explicit: DSH rc.2 still mis-parses package paths containing spaces or non-ASCII characters, while release-URL installation works normally.
+- Bump the plugin client identity to `0.1.2`.
+
 ## 0.1.1 - 2026-08-14
 
 - Rename the public package and repository to `dsh-tmcra-memory` to follow the DeepSeek Harness community convention.

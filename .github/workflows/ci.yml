@@ -19,11 +19,12 @@ jobs:
         with:
           node-version: 24
           cache: pnpm
-      # Harness rc.6 was released less than pnpm's default package-age window
-      # ago. Every dependency remains exact-lockfile and integrity verified.
+      # Harness is pinned exactly; release candidates may be newer than pnpm's
+      # default package-age window. The lockfile and package integrities remain verified.
       - run: pnpm install --frozen-lockfile --config.minimum-release-age=0
       - run: npm run typecheck
       - run: npm test
       - run: npm run build
+      - run: npm run test:dsh-compat
       - run: npm run pack:check
       - run: pnpm audit --prod

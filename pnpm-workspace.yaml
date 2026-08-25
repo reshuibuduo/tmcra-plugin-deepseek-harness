@@ -1,0 +1,13 @@
+allowBuilds:
+  # Reviewed native/runtime build steps required by the official DSH package.
+  '@deepseek-ai/dsh-subprocess-local': true
+  koffi: true
+  node-pty: true
+  # These transitive lifecycle scripts are not required by DSH at runtime.
+  '@google/genai': false
+  protobufjs: false
+
+peerDependencyRules:
+  allowedVersions:
+    # DSH rc.2 ships React 19; this legacy shim's peer range has not caught up.
+    react: '>=16.8 <20'

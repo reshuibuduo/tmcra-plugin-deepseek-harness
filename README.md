@@ -6,7 +6,7 @@ This plugin connects Harness lifecycle events to the TMCRA Memory API. A new hum
 
 The repository vendors the reviewable TypeScript client and lifecycle modules used by the adapter under `src/sdk/`. Hosted API, account, billing, control-plane, database, deployment, and production memory-engine code are not included.
 
-> Status: technical preview. Verified with `@deepseek-ai/dsh` `0.1.0-rc.6` and TMCRA API `0.2.2`. DeepSeek Harness itself is currently a developer preview and may introduce breaking changes.
+> Status: technical preview. Verified with `@deepseek-ai/dsh` `0.1.1-rc.2` and TMCRA API `0.2.2`. DeepSeek Harness itself is currently a developer preview and may introduce breaking changes.
 
 [中文说明](./README.zh-CN.md)
 
@@ -52,7 +52,7 @@ This is designed for development, research, product work, and multi-Agent collab
 ## Requirements
 
 - Node.js `22.19.0` or newer
-- DeepSeek Harness `0.1.0-rc.6`
+- DeepSeek Harness `0.1.1-rc.2`
 - `pnpm` on `PATH` for Harness plugin management
 - A TMCRA account. The login command creates the scoped plugin token for you.
 
@@ -61,7 +61,7 @@ During the initial release period, TMCRA accounts are free to use with no memory
 ## Install the preview tarball
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/dsh-tmcra-memory/releases/download/v0.1.1/dsh-tmcra-memory-0.1.1.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/dsh-tmcra-memory/releases/download/v0.1.2/dsh-tmcra-memory-0.1.2.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
@@ -69,9 +69,9 @@ dsh web
 
 Harness serves its Web UI at `http://127.0.0.1:3080` by default.
 
-The package contributes `cordis.patch.yml`, so the install command activates the plugin in the selected profile. Prefer the prebuilt release tarball. A locally downloaded copy can also be installed with `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.1.tgz`. Installing from a Git source may require an explicit `pnpm` build-script allowance.
+The package contributes `cordis.patch.yml`, so the install command activates the plugin in the selected profile. Prefer the prebuilt release tarball. A locally downloaded copy can also be installed with `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.2.tgz`. Installing from a Git source may require an explicit `pnpm` build-script allowance.
 
-On the current Harness preview for Windows, an absolute tarball path containing spaces or non-ASCII characters may be re-anchored incorrectly by `dsh plugin add`. If that happens, copy the tarball to a short path without spaces, such as `D:\\dsh-packages\\dsh-tmcra-memory-0.1.1.tgz`, and install from that path.
+DSH `0.1.1-rc.2` on Windows can still re-anchor a local package path incorrectly when the path contains spaces or non-ASCII characters. Copy the tarball to a short ASCII path first, such as `D:\\dsh-packages\\dsh-tmcra-memory-0.1.2.tgz`. The release URL above is not affected.
 
 ## Connect your TMCRA account
 
@@ -134,6 +134,7 @@ Recalled evidence uses Harness's durable plugin-message form (`form: recall`). I
 npm run typecheck
 npm test
 npm run build
+npm run test:dsh-compat
 npm run pack:check
 pnpm audit --prod
 ```
@@ -159,7 +160,7 @@ On 2026-08-14, the preview passed a production API acceptance run: a new project
 - Account connection currently uses the guided CLI/browser flow; Harness does not yet expose a native TMCRA settings panel.
 - It does not import historical Harness conversations.
 - Long-session context growth follows Harness's durable recall-message and compaction semantics and still needs workload characterization.
-- Compatibility is tested only against Harness `0.1.0-rc.6`.
+- Compatibility is pinned and tested against Harness `0.1.1-rc.2`; DSH remains a fast-moving preview, so each new release requires a fresh compatibility run.
 - The package has not yet been published to npm; the reviewed `.tgz` is the current installation artifact.
 - A live DeepSeek-provider answer test requires the user's own DeepSeek credential; the memory lifecycle test itself does not require one.
 - The memory library and knowledge graph are opened from the TMCRA web or desktop app; the Harness integration runs in the background during conversations.

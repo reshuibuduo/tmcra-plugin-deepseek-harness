@@ -90,7 +90,7 @@ async function postJson(fetchImpl: FetchLike, url: string, body: Record<string, 
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "dsh-tmcra-memory/0.1.1",
+        "User-Agent": "dsh-tmcra-memory/0.1.2",
       },
       body: JSON.stringify(body),
       signal: controller.signal,
@@ -320,7 +320,7 @@ export async function authorizeDeepSeekHarness(options: DeviceAuthOptions = {}) 
   const started = await postJson(fetchImpl, `${authBaseUrl}/api/device/v1/authorizations`, {
     clientId: CLIENT_ID,
     clientName: `DeepSeek Harness (${platform()} ${process.arch})`,
-    clientVersion: "0.1.1",
+    clientVersion: "0.1.2",
     codeChallenge: challenge,
     codeChallengeMethod: "S256",
   });

@@ -6,7 +6,7 @@
 
 仓库在 `src/sdk/` 中附带适配器实际使用、可审查的 TypeScript 客户端与生命周期模块。托管 API、账号、计费、控制面、数据库、部署配置和生产记忆引擎代码均不在公开范围内。
 
-> 当前状态：技术预览。已针对 `@deepseek-ai/dsh` `0.1.0-rc.6` 与 TMCRA API `0.2.2` 验证。DeepSeek Harness 本身仍处于 Developer Preview，后续可能出现破坏性兼容变更。
+> 当前状态：技术预览。已针对 `@deepseek-ai/dsh` `0.1.1-rc.2` 与 TMCRA API `0.2.2` 验证。DeepSeek Harness 本身仍处于 Developer Preview，后续可能出现破坏性兼容变更。
 
 [English](./README.md)
 
@@ -52,7 +52,7 @@ Agent 回答前，TMCRA 会找回与当前问题有关的用户要求、决策�
 ## 环境要求
 
 - Node.js `22.19.0` 或更新版本
-- DeepSeek Harness `0.1.0-rc.6`
+- DeepSeek Harness `0.1.1-rc.2`
 - Harness 管理插件时需要 `pnpm` 位于 `PATH`
 - 一个 TMCRA 账号。登录命令会自动创建插件所需的范围令牌。
 
@@ -61,7 +61,7 @@ Agent 回答前，TMCRA 会找回与当前问题有关的用户要求、决策�
 ## 安装技术预览包
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/dsh-tmcra-memory/releases/download/v0.1.1/dsh-tmcra-memory-0.1.1.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/dsh-tmcra-memory/releases/download/v0.1.2/dsh-tmcra-memory-0.1.2.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
@@ -69,9 +69,9 @@ dsh web
 
 Harness Web UI 默认地址为 `http://127.0.0.1:3080`。
 
-压缩包内含 `cordis.patch.yml`，安装后会自动加入指定 Profile 的配置层。建议使用 Release 中已经构建好的 `.tgz`。下载到本地后，也可以执行 `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.1.tgz`。从 Git 源码安装可能还需要在 `pnpm` 中单独允许构建脚本。
+压缩包内含 `cordis.patch.yml`，安装后会自动加入指定 Profile 的配置层。建议使用 Release 中已经构建好的 `.tgz`。下载到本地后，也可以执行 `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.2.tgz`。从 Git 源码安装可能还需要在 `pnpm` 中单独允许构建脚本。
 
-当前 Windows 版 Harness 预览工具在处理“包含空格或非 ASCII 字符的压缩包绝对路径”时，可能会错误地重新拼接路径。遇到此问题时，先把压缩包复制到不含空格的短路径，例如 `D:\\dsh-packages\\dsh-tmcra-memory-0.1.1.tgz`，再执行安装。
+DSH `0.1.1-rc.2` 的 Windows 版仍可能把包含空格或非 ASCII 字符的本地包路径错误重组。请先把压缩包复制到纯 ASCII 短路径，例如 `D:\\dsh-packages\\dsh-tmcra-memory-0.1.2.tgz`；上面的 Release URL 不受影响。
 
 ## 连接 TMCRA 账号
 
@@ -134,6 +134,7 @@ Harness 不会把凭据值写入普通设置或模型请求。如果模型控制
 npm run typecheck
 npm test
 npm run build
+npm run test:dsh-compat
 npm run pack:check
 pnpm audit --prod
 ```
@@ -159,7 +160,7 @@ npm run test:remote
 - 账号连接目前采用 CLI 引导加浏览器确认；Harness 内部暂时没有原生 TMCRA 设置页。
 - 暂未提供 Harness 历史会话导入。
 - 长会话中的上下文增长遵循 Harness 的召回消息与压缩机制，仍需补充长时间工作负载测试。
-- 当前只验证了 Harness `0.1.0-rc.6`。
+- 当前精确锁定并验证 Harness `0.1.1-rc.2`；DSH 仍快速迭代，每次发布新版本都需要重新跑兼容性验收。
 - npm 包尚未正式发布；当前安装产物是已经审计的 `.tgz`。
 - 使用真实 DeepSeek 模型完成回答，需要用户自己的 DeepSeek 凭据；记忆生命周期测试本身不依赖该凭据。
 - 记忆库和知识图谱通过 TMCRA 网页端或桌面应用查看；Harness 接入在对话过程中后台运行。
