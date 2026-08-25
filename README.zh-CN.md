@@ -61,7 +61,7 @@ Agent 回答前，TMCRA 会找回与当前问题有关的用户要求、决策�
 ## 安装技术预览包
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/dsh-tmcra-memory/releases/download/v0.1.2/dsh-tmcra-memory-0.1.2.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.2/dsh-tmcra-memory-0.1.2.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web

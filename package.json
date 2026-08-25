@@ -51,10 +51,10 @@
   "homepage": "https://tmcra.com",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/reshuibuduo/dsh-tmcra-memory.git"
+    "url": "git+https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness.git"
   },
   "bugs": {
-    "url": "https://github.com/reshuibuduo/dsh-tmcra-memory/issues"
+    "url": "https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/issues"
   },
   "license": "Apache-2.0",
   "engines": {

@@ -61,7 +61,7 @@ During the initial release period, TMCRA accounts are free to use with no memory
 ## Install the preview tarball
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/dsh-tmcra-memory/releases/download/v0.1.2/dsh-tmcra-memory-0.1.2.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.2/dsh-tmcra-memory-0.1.2.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
