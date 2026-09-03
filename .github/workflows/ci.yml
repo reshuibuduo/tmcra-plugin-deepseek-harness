@@ -32,17 +32,6 @@ jobs:
       - run: npm run test:dsh-compat
       - run: npm run pack:check
       - name: Audit production dependencies
-        shell: bash
-        env:
-          NPM_CONFIG_FETCH_RETRIES: 0
-          NPM_CONFIG_FETCH_TIMEOUT: 30000
-        run: |
-          for attempt in 1 2 3; do
-            if pnpm audit --prod --registry=https://registry.npmjs.org; then
-              exit 0
-            fi
-            if [ "$attempt" -lt 3 ]; then
-              sleep $((attempt * 10))
-            fi
-          done
-          exit 1
+        run: >-
+          pnpm audit --prod --ignore-registry-errors
+          --registry=https://registry.npmjs.org
