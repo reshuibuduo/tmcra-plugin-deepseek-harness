@@ -3,8 +3,8 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
 import { spawn } from "node:child_process";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { chmod, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { withFileLock, writeFileAtomic } from "@deepseek-ai/dsh-atomic-write";
 import { Document, isMap, parseDocument } from "yaml";
@@ -58,7 +58,7 @@ async function postJson(fetchImpl, url, body) {
 			headers: {
 				Accept: "application/json",
 				"Content-Type": "application/json",
-				"User-Agent": "dsh-tmcra-memory/0.1.5"
+				"User-Agent": "dsh-tmcra-memory/0.1.6"
 			},
 			body: JSON.stringify(body),
 			signal: controller.signal
@@ -277,7 +277,7 @@ async function authorizeDeepSeekHarness(options = {}) {
 	const started = await postJson(fetchImpl, `${authBaseUrl}/api/device/v1/authorizations`, {
 		clientId: CLIENT_ID,
 		clientName: `DeepSeek Harness (${platform()} ${process.arch})`,
-		clientVersion: "0.1.5",
+		clientVersion: "0.1.6",
 		codeChallenge: challenge,
 		codeChallengeMethod: "S256"
 	});
@@ -383,10 +383,30 @@ function option(name) {
 function printJson(value) {
 	process.stdout.write(`${JSON.stringify(value)}\n`);
 }
+async function runProviderSetup() {
+	const cliDirectory = dirname(fileURLToPath(import.meta.url));
+	const script = resolve(cliDirectory, "..", "scripts", "provider_setup.mjs");
+	const forwarded = process.argv.slice(3);
+	await new Promise((resolvePromise, reject) => {
+		const child = spawn(process.execPath, [script, ...forwarded], {
+			stdio: "inherit",
+			windowsHide: true
+		});
+		child.once("error", reject);
+		child.once("exit", (code, signal) => {
+			if (code === 0) resolvePromise();
+			else reject(/* @__PURE__ */ new Error(`TMCRA provider setup exited with ${signal || code || "an error"}.`));
+		});
+	});
+}
 async function main() {
 	const command = process.argv[2] || "help";
 	const json = process.argv.includes("--json");
 	const dshHome = option("--dsh-home");
+	if (command === "setup" || command === "configure-models") {
+		await runProviderSetup();
+		return;
+	}
 	if (command === "login") {
 		const result = await authorizeDeepSeekHarness({
 			dshHome,
@@ -427,7 +447,7 @@ async function main() {
 		else process.stdout.write(`TMCRA credentials were removed from ${path}. Revoke the connection in your TMCRA account if this device is no longer trusted.\n`);
 		return;
 	}
-	process.stdout.write(`Usage:\n  dsh-tmcra-memory login [--no-open] [--auth-base-url URL] [--dsh-home PATH] [--json]\n  dsh-tmcra-memory status [--dsh-home PATH] [--json]\n  dsh-tmcra-memory logout [--dsh-home PATH] [--json]\n`);
+	process.stdout.write(`Usage:\n  dsh-tmcra-memory setup [--no-open] [--config-file PATH] [--json]\n  dsh-tmcra-memory login [--no-open] [--auth-base-url URL] [--dsh-home PATH] [--json]\n  dsh-tmcra-memory status [--dsh-home PATH] [--json]\n  dsh-tmcra-memory logout [--dsh-home PATH] [--json]\n`);
 }
 const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 if (import.meta.url === invokedPath) await main().catch((error) => {

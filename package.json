@@ -1,6 +1,6 @@
 {
   "name": "dsh-tmcra-memory",
-  "version": "0.1.5",
+  "version": "0.1.6",
   "description": "Automatic TMCRA recall, injection, and role-separated writeback for DeepSeek Harness",
   "type": "module",
   "main": "dist/index.mjs",
@@ -19,6 +19,9 @@
     "dist/index.d.mts",
     "dist/cli.mjs",
     "dist/cli.d.mts",
+    "scripts/provider_config.mjs",
+    "scripts/provider_setup.mjs",
+    "resources/provider-settings.html",
     "cordis.patch.yml",
     "README.md",
     "README.zh-CN.md",
@@ -32,7 +35,8 @@
   "scripts": {
     "build": "tsdown && node ./scripts/normalize-package-files.mjs",
     "typecheck": "tsc --noEmit -p tsconfig.json",
-    "test": "vitest run",
+    "test": "vitest run && node ./test/provider-setup-contract.mjs",
+    "test:provider-setup": "node ./test/provider-setup-contract.mjs",
     "test:dsh-compat": "node ./scripts/test-dsh-compat.mjs",
     "test:remote": "vitest run test/remote.test.ts",
     "pack:check": "npm pack --dry-run --json",

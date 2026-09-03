@@ -61,7 +61,7 @@ During the initial release period, TMCRA accounts are free to use with no memory
 ## Install the preview tarball
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.5/dsh-tmcra-memory-0.1.5.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.6/dsh-tmcra-memory-0.1.6.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
@@ -69,9 +69,9 @@ dsh web
 
 Harness serves its Web UI at `http://127.0.0.1:3080` by default.
 
-The package contributes `cordis.patch.yml`, so the install command activates the plugin in the selected profile. Prefer the prebuilt release tarball. A locally downloaded copy can also be installed with `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.5.tgz`. Installing from a Git source may require an explicit `pnpm` build-script allowance.
+The package contributes `cordis.patch.yml`, so the install command activates the plugin in the selected profile. Prefer the prebuilt release tarball. A locally downloaded copy can also be installed with `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.6.tgz`. Installing from a Git source may require an explicit `pnpm` build-script allowance.
 
-DSH `0.1.1-rc.2` on Windows can still re-anchor a local package path incorrectly when the path contains spaces or non-ASCII characters. Copy the tarball to a short ASCII path first, such as `D:\\dsh-packages\\dsh-tmcra-memory-0.1.5.tgz`. The release URL above is not affected.
+DSH `0.1.1-rc.2` on Windows can still re-anchor a local package path incorrectly when the path contains spaces or non-ASCII characters. Copy the tarball to a short ASCII path first, such as `D:\\dsh-packages\\dsh-tmcra-memory-0.1.6.tgz`. The release URL above is not affected.
 
 ## Connect your TMCRA account
 
@@ -91,6 +91,18 @@ dsh plugin --profile web exec dsh-tmcra-memory logout
 `status` reports whether the local Harness profile is connected without printing the token. `logout` removes only the TMCRA entries and preserves other Harness credentials. If the computer is lost or no longer trusted, revoke the connection from the TMCRA personal console as well.
 
 Harness keeps credential values out of settings and model requests. A model-operated tool running as the same operating-system user may still read files that user can read, so the connection should remain tied to a trusted local account.
+
+## Configure local Writer and organizer providers
+
+Open the local setup page after installing the plugin:
+
+```bash
+dsh plugin --profile web exec dsh-tmcra-memory setup
+```
+
+The command starts a random-token setup session bound to `127.0.0.1`. Writer and background organizer can share one provider or use separate Provider, Base URL, model, and API Key values. The Codex and Harness plugins share `~/.config/tmcra/local-providers.json`. Keys stay in that local user file and are sent only to the configured provider during a connection test. Changing Provider or Base URL requires the key to be entered again. The file uses mode `0600` on macOS/Linux; on Windows it removes inherited ACLs and grants access only to the current user and SYSTEM.
+
+This release provides the settings UI, validation, redacted status, and connection test. Production ingest and consolidation jobs continue to use the existing TMCRA service pipeline until the client task protocol and local executor are connected.
 
 Default plugin configuration:
 
@@ -157,7 +169,7 @@ On 2026-08-14, the preview passed a production API acceptance run: a new project
 
 ## Current limits
 
-- Account connection currently uses the guided CLI/browser flow; Harness does not yet expose a native TMCRA settings panel.
+- Account connection and local model configuration use guided CLI/browser flows; Harness does not yet embed a native TMCRA settings panel.
 - It does not import historical Harness conversations.
 - Long-session context growth follows Harness's durable recall-message and compaction semantics and still needs workload characterization.
 - Compatibility is pinned and tested against Harness `0.1.1-rc.2`; DSH remains a fast-moving preview, so each new release requires a fresh compatibility run.

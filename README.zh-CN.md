@@ -61,7 +61,7 @@ Agent 回答前，TMCRA 会找回与当前问题有关的用户要求、决策�
 ## 安装技术预览包
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.5/dsh-tmcra-memory-0.1.5.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.6/dsh-tmcra-memory-0.1.6.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
@@ -69,9 +69,9 @@ dsh web
 
 Harness Web UI 默认地址为 `http://127.0.0.1:3080`。
 
-压缩包内含 `cordis.patch.yml`，安装后会自动加入指定 Profile 的配置层。建议使用 Release 中已经构建好的 `.tgz`。下载到本地后，也可以执行 `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.5.tgz`。从 Git 源码安装可能还需要在 `pnpm` 中单独允许构建脚本。
+压缩包内含 `cordis.patch.yml`，安装后会自动加入指定 Profile 的配置层。建议使用 Release 中已经构建好的 `.tgz`。下载到本地后，也可以执行 `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.6.tgz`。从 Git 源码安装可能还需要在 `pnpm` 中单独允许构建脚本。
 
-DSH `0.1.1-rc.2` 的 Windows 版仍可能把包含空格或非 ASCII 字符的本地包路径错误重组。请先把压缩包复制到纯 ASCII 短路径，例如 `D:\\dsh-packages\\dsh-tmcra-memory-0.1.5.tgz`；上面的 Release URL 不受影响。
+DSH `0.1.1-rc.2` 的 Windows 版仍可能把包含空格或非 ASCII 字符的本地包路径错误重组。请先把压缩包复制到纯 ASCII 短路径，例如 `D:\\dsh-packages\\dsh-tmcra-memory-0.1.6.tgz`；上面的 Release URL 不受影响。
 
 ## 连接 TMCRA 账号
 
@@ -91,6 +91,18 @@ dsh plugin --profile web exec dsh-tmcra-memory logout
 `status` 只显示当前 Profile 的连接状态，不输出令牌。`logout` 只删除 TMCRA 相关凭据，其他 Harness 凭据会原样保留。电脑遗失或不再可信时，还应在 TMCRA 个人控制台中撤销该连接。
 
 Harness 不会把凭据值写入普通设置或模型请求。如果模型控制的工具和 Harness 使用同一个系统用户，它仍可能读取该系统用户有权访问的本地文件，因此只应在可信本地账号中保留连接。
+
+## 配置本地 Writer 与后台整理模型
+
+安装后执行：
+
+```bash
+dsh plugin --profile web exec dsh-tmcra-memory setup
+```
+
+命令会在 `127.0.0.1` 启动带随机令牌的临时配置页。Writer 与后台整理可以共用一个模型服务，也可以分别填写 Provider、Base URL、模型名称和 API Key。Codex 与 Harness 共用 `~/.config/tmcra/local-providers.json`；Key 只保存在当前系统用户的本地文件中，连接测试时只发往填写的模型服务。Provider 或 Base URL 改变后需要重新填写 Key。macOS/Linux 使用 `0600` 权限；Windows 移除继承 ACL，只授权当前用户与 SYSTEM。
+
+此版本完成配置页、输入校验、脱敏状态和连接测试。生产写入与整理任务继续使用现有 TMCRA 服务端链路；客户端任务协议与本地执行器接通后，这些模型配置才能实际接管任务。
 
 插件默认配置：
 
@@ -157,7 +169,7 @@ npm run test:remote
 
 ## 当前边界
 
-- 账号连接目前采用 CLI 引导加浏览器确认；Harness 内部暂时没有原生 TMCRA 设置页。
+- 账号连接和本地模型配置采用 CLI 引导加浏览器确认；Harness 内部暂时没有嵌入式 TMCRA 设置页。
 - 暂未提供 Harness 历史会话导入。
 - 长会话中的上下文增长遵循 Harness 的召回消息与压缩机制，仍需补充长时间工作负载测试。
 - 当前精确锁定并验证 Harness `0.1.1-rc.2`；DSH 仍快速迭代，每次发布新版本都需要重新跑兼容性验收。

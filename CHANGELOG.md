@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6 - 2026-09-04
+
+- Add a local setup command and loopback settings UI for separate Writer and background-organizer providers.
+- Share the local provider configuration with the Codex plugin without exposing credential values to Harness or model output.
+- Prevent a saved credential from being reused after its provider or Base URL changes.
+
 ## 0.1.5 - 2026-09-04
 
 - Canonicalize the executable mode and use a deterministic stored-DEFLATE gzip stream for byte-for-byte identical release tarballs on Windows and Linux.

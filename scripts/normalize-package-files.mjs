@@ -12,8 +12,11 @@ const packagedTextFiles = [
   "dist/index.mjs",
   "LICENSE",
   "package.json",
+  "resources/provider-settings.html",
   "README.md",
   "README.zh-CN.md",
+  "scripts/provider_config.mjs",
+  "scripts/provider_setup.mjs",
 ];
 
 for (const relativePath of packagedTextFiles) {
