@@ -5,6 +5,7 @@ import { dirname, join, resolve } from "node:path";
 import z from "@deepseek-ai/schemastery";
 import { credentialRef } from "@deepseek-ai/dsh-credentials";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
+import { readFile } from "node:fs/promises";
 //#region src/sdk/errors.ts
 var TMCRAError = class extends Error {
 	requestId;
@@ -244,6 +245,7 @@ var TMCRAClient = class {
 	defaultTimeoutMs;
 	retryPolicy;
 	defaultHeaders;
+	localProviderExecution;
 	constructor(options) {
 		const resolvedBaseUrl = options.baseUrl ?? "https://api.tmcra.com";
 		const base = new URL(resolvedBaseUrl);
@@ -265,6 +267,10 @@ var TMCRAClient = class {
 		if (retry.maxDelayMs < retry.initialDelayMs) throw new RangeError("maxDelayMs must be >= initialDelayMs");
 		if (!Array.isArray(retry.retryStatusCodes) || retry.retryStatusCodes.some((status) => !Number.isInteger(status))) throw new RangeError("retryStatusCodes must contain integers");
 		this.retryPolicy = retry;
+		this.localProviderExecution = {
+			writer: options.localProviderExecution?.writer === true,
+			organizer: options.localProviderExecution?.organizer === true
+		};
 		this.defaultHeaders = mergeHeaders({
 			"X-TMCRA-Client-Platform": options.clientPlatform ?? "typescript",
 			...options.integrationId ? { "X-TMCRA-Integration-ID": options.integrationId } : {},
@@ -351,7 +357,7 @@ var TMCRAClient = class {
 			body: JSON.stringify(payload)
 		}, {
 			...options,
-			headers: mergeHeaders(options.headers, { "Idempotency-Key": idempotencyKey }),
+			headers: mergeHeaders(options.headers, this.ingestExecutionHeaders(), { "Idempotency-Key": idempotencyKey }),
 			retryMode: "safe"
 		});
 	}
@@ -371,7 +377,7 @@ var TMCRAClient = class {
 			body: JSON.stringify(payload)
 		}, {
 			...options,
-			headers: mergeHeaders(options.headers, { "Idempotency-Key": retryKey }),
+			headers: mergeHeaders(options.headers, this.ingestExecutionHeaders(), { "Idempotency-Key": retryKey }),
 			retryMode: "safe"
 		});
 	}
@@ -382,7 +388,40 @@ var TMCRAClient = class {
 			body: "{}"
 		}, {
 			...options,
-			headers: mergeHeaders(options.headers, { "Idempotency-Key": idempotencyKey }),
+			headers: mergeHeaders(options.headers, this.localProviderExecution.organizer ? { "X-TMCRA-Organizer-Execution": "user-provider" } : void 0, { "Idempotency-Key": idempotencyKey }),
+			retryMode: "safe"
+		});
+	}
+	async claimUserProviderTask(stage, options = {}) {
+		return this.requestJson("v1/provider-tasks/claim", {
+			method: "POST",
+			body: JSON.stringify({ stage })
+		}, {
+			...options,
+			retryMode: "never"
+		});
+	}
+	async startUserProviderTask(taskId, leaseToken, options = {}) {
+		return this.providerTaskLeaseRequest(taskId, "started", leaseToken, options);
+	}
+	async heartbeatUserProviderTask(taskId, leaseToken, options = {}) {
+		return this.providerTaskLeaseRequest(taskId, "heartbeat", leaseToken, options);
+	}
+	async completeUserProviderTask(taskId, body, options = {}) {
+		return this.requestJson(`v1/provider-tasks/${encodeURIComponent(taskId)}/complete`, {
+			method: "POST",
+			body: JSON.stringify(body)
+		}, {
+			...options,
+			retryMode: "safe"
+		});
+	}
+	async failUserProviderTask(taskId, body, options = {}) {
+		return this.requestJson(`v1/provider-tasks/${encodeURIComponent(taskId)}/fail`, {
+			method: "POST",
+			body: JSON.stringify(body)
+		}, {
+			...options,
 			retryMode: "safe"
 		});
 	}
@@ -636,6 +675,22 @@ var TMCRAClient = class {
 		const key = value ?? randomIdempotencyKey();
 		if (key.length < 8 || key.length > 200) throw new RangeError("idempotencyKey must be 8-200 characters");
 		return key;
+	}
+	ingestExecutionHeaders() {
+		if (!this.localProviderExecution.writer && !this.localProviderExecution.organizer) return void 0;
+		return {
+			...this.localProviderExecution.writer ? { "X-TMCRA-Writer-Execution": "user-provider" } : {},
+			...this.localProviderExecution.organizer ? { "X-TMCRA-Organizer-Execution": "user-provider" } : {}
+		};
+	}
+	providerTaskLeaseRequest(taskId, action, leaseToken, options) {
+		return this.requestJson(`v1/provider-tasks/${encodeURIComponent(taskId)}/${action}`, {
+			method: "POST",
+			body: JSON.stringify({ lease_token: leaseToken })
+		}, {
+			...options,
+			retryMode: "safe"
+		});
 	}
 	async requestJson(path, init, options) {
 		const response = await this.request(path, init, options);
@@ -1446,6 +1501,482 @@ function processSafeRandom() {
 	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
 }
 //#endregion
+//#region src/local-provider-config.ts
+const PROVIDERS = /* @__PURE__ */ new Set([
+	"deepseek",
+	"openai-compatible",
+	"local-openai-compatible"
+]);
+const MAX_TEXT_LENGTH = 512;
+const MAX_SECRET_LENGTH = 4096;
+function resolveLocalProviderConfigPath(value = process.env.TMCRA_LOCAL_PROVIDER_CONFIG) {
+	return resolve(value?.trim() || join(homedir(), ".config", "tmcra", "local-providers.json"));
+}
+function boundedText(value, field, maximum = MAX_TEXT_LENGTH) {
+	const normalized = String(value ?? "").trim();
+	if (!normalized || normalized.length > maximum || /[\r\n\0]/u.test(normalized)) throw new Error(`tmcra-memory: ${field} is invalid`);
+	return normalized;
+}
+function loopbackHost(hostname) {
+	return [
+		"localhost",
+		"127.0.0.1",
+		"::1",
+		"[::1]"
+	].includes(hostname.toLowerCase());
+}
+function providerBaseUrl(value, field) {
+	const normalized = boundedText(value, field, 2048);
+	let parsed;
+	try {
+		parsed = new URL(normalized);
+	} catch {
+		throw new Error(`tmcra-memory: ${field} must be a valid URL`);
+	}
+	if (parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error(`tmcra-memory: ${field} contains unsupported URL components`);
+	if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopbackHost(parsed.hostname))) throw new Error(`tmcra-memory: ${field} must use HTTPS; loopback may use HTTP`);
+	return parsed.toString().replace(/\/+$/u, "");
+}
+function providerStage(value, field) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`tmcra-memory: ${field} must be an object`);
+	const input = value;
+	const provider = boundedText(input.provider, `${field} provider`);
+	if (!PROVIDERS.has(provider)) throw new Error(`tmcra-memory: ${field} provider is unsupported`);
+	const apiKey = String(input.apiKey ?? "").trim();
+	if (apiKey.length > MAX_SECRET_LENGTH || /[\r\n\0]/u.test(apiKey)) throw new Error(`tmcra-memory: ${field} API key is invalid`);
+	return {
+		provider,
+		baseUrl: providerBaseUrl(input.baseUrl, `${field} base URL`),
+		model: boundedText(input.model, `${field} model`),
+		...apiKey ? { apiKey } : {}
+	};
+}
+function validateStoredConfig(value) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("tmcra-memory: local provider configuration must be an object");
+	const input = value;
+	if (input.schemaVersion !== 1 || input.execution !== "local") throw new Error("tmcra-memory: local provider configuration version is unsupported");
+	const writer = providerStage(input.writer, "writer");
+	if (!input.organizer || typeof input.organizer !== "object" || Array.isArray(input.organizer)) throw new Error("tmcra-memory: organizer configuration must be an object");
+	const organizerInput = input.organizer;
+	const organizer = organizerInput.inheritWriter !== false ? { inheritWriter: true } : {
+		inheritWriter: false,
+		...providerStage(organizerInput, "organizer")
+	};
+	const updatedAt = boundedText(input.updatedAt, "provider updatedAt", 64);
+	if (Number.isNaN(Date.parse(updatedAt))) throw new Error("tmcra-memory: provider updatedAt must be an ISO timestamp");
+	return {
+		schemaVersion: 1,
+		execution: "local",
+		writer,
+		organizer,
+		updatedAt
+	};
+}
+async function readLocalProviderConfig(path = resolveLocalProviderConfigPath()) {
+	if (!existsSync(path)) return null;
+	return validateStoredConfig(JSON.parse(await readFile(path, "utf8")));
+}
+function resolvedLocalProviderStage(config, stage) {
+	if (stage === "writer") return config.writer;
+	return config.organizer.inheritWriter ? config.writer : config.organizer;
+}
+function localProviderStageReady(config, stage) {
+	const target = resolvedLocalProviderStage(config, stage);
+	return Boolean(target.apiKey) || loopbackHost(new URL(target.baseUrl).hostname);
+}
+//#endregion
+//#region src/local-provider-executor.ts
+const TASK_SCHEMA_VERSION = "tmcra.user-provider-task.1";
+const REQUEST_SCHEMA_VERSION = "tmcra.openai-compatible-request.1";
+const STAGES = ["writer", "organizer"];
+const MAX_PROVIDER_RESPONSE_BYTES = 8388608;
+const MAX_TASK_OUTPUT_BYTES = 4194304;
+const DEFAULT_IDLE_MS = 1e3;
+const DEFAULT_PROVIDER_TIMEOUT_MS = 18e4;
+function delay(milliseconds, signal) {
+	if (signal?.aborted) return Promise.resolve();
+	return new Promise((resolvePromise) => {
+		let settled = false;
+		const finish = () => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timer);
+			signal?.removeEventListener("abort", finish);
+			resolvePromise();
+		};
+		const timer = setTimeout(finish, milliseconds);
+		timer.unref?.();
+		signal?.addEventListener("abort", finish, { once: true });
+	});
+}
+function boundedString(value, label, maximum) {
+	const text = String(value ?? "").trim();
+	if (!text || text.length > maximum || /[\r\n\0]/u.test(text)) throw new Error(`${label} is invalid`);
+	return text;
+}
+function validateTask(task, expectedStage) {
+	if (!task || typeof task !== "object" || Array.isArray(task)) throw new Error("provider task must be an object");
+	const input = task;
+	if (input.schema_version !== TASK_SCHEMA_VERSION || input.stage !== expectedStage) throw new Error("provider task contract is unsupported");
+	const taskId = boundedString(input.task_id, "provider task ID", 200);
+	const leaseToken = boundedString(input.lease_token, "provider task lease", 256);
+	if (leaseToken.length < 32) throw new Error("provider task lease is invalid");
+	const requestSha256 = boundedString(input.request_sha256, "provider request digest", 64);
+	if (!/^[0-9a-f]{64}$/u.test(requestSha256)) throw new Error("provider request digest is invalid");
+	const operation = boundedString(input.operation, "provider task operation", 80);
+	const modelRequest = input.request;
+	if (!modelRequest || typeof modelRequest !== "object" || Array.isArray(modelRequest)) throw new Error("provider model request is invalid");
+	const request = modelRequest;
+	const allowed = /* @__PURE__ */ new Set([
+		"schema_version",
+		"messages",
+		"temperature",
+		"max_tokens",
+		"response_format"
+	]);
+	if (request.schema_version !== REQUEST_SCHEMA_VERSION || Object.keys(request).some((key) => !allowed.has(key)) || !Array.isArray(request.messages) || request.messages.length < 2 || request.messages.length > 64) throw new Error("provider model request contract is invalid");
+	const messages = request.messages.map((message) => {
+		if (!message || typeof message !== "object" || Array.isArray(message)) throw new Error("provider message is invalid");
+		const item = message;
+		const role = String(item.role ?? "");
+		if (!(/* @__PURE__ */ new Set([
+			"system",
+			"user",
+			"assistant"
+		])).has(role)) throw new Error("provider message role is invalid");
+		if (typeof item.content !== "string" || item.content.length > 8e6) throw new Error("provider message content is invalid");
+		return {
+			role,
+			content: item.content
+		};
+	});
+	const maxTokens = Number(request.max_tokens);
+	if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 131072) throw new Error("provider max_tokens is invalid");
+	if (request.temperature !== 0) throw new Error("provider temperature contract is invalid");
+	const responseFormat = request.response_format;
+	if (!responseFormat || typeof responseFormat !== "object" || Array.isArray(responseFormat)) throw new Error("provider response format is invalid");
+	const responseFormatType = responseFormat.type;
+	if (responseFormatType !== "json_object" && responseFormatType !== "json_schema") throw new Error("provider response format is unsupported");
+	const leaseExpiresAt = Number(input.lease_expires_at);
+	if (!Number.isFinite(leaseExpiresAt) || leaseExpiresAt < 0) throw new Error("provider task lease expiry is invalid");
+	return {
+		schema_version: TASK_SCHEMA_VERSION,
+		task_id: taskId,
+		stage: expectedStage,
+		operation,
+		request_sha256: requestSha256,
+		request: {
+			schema_version: REQUEST_SCHEMA_VERSION,
+			messages,
+			temperature: 0,
+			max_tokens: maxTokens,
+			response_format: responseFormat
+		},
+		lease_token: leaseToken,
+		lease_expires_at: leaseExpiresAt
+	};
+}
+function usageCount(value, ...names) {
+	const found = names.map((name) => value[name]).find((item) => item !== void 0);
+	if (found === void 0) return null;
+	const number = Number(found);
+	return Number.isSafeInteger(number) && number >= 0 ? number : null;
+}
+function normalizeUsage(value) {
+	if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+	const usage = value;
+	const input = usageCount(usage, "prompt_tokens", "input_tokens");
+	const output = usageCount(usage, "completion_tokens", "output_tokens");
+	if (input === null || output === null) return null;
+	const details = usage.prompt_tokens_details;
+	const cachedFromDetails = details && typeof details === "object" && !Array.isArray(details) ? usageCount(details, "cached_tokens") : null;
+	const hit = usageCount(usage, "prompt_cache_hit_tokens", "cache_read_input_tokens", "cached_tokens") ?? cachedFromDetails;
+	const miss = usageCount(usage, "prompt_cache_miss_tokens", "cache_miss_input_tokens");
+	const normalizedHit = hit ?? (miss === null ? 0 : input - miss);
+	const normalizedMiss = miss ?? input - normalizedHit;
+	if (normalizedHit < 0 || normalizedMiss < 0 || normalizedHit + normalizedMiss !== input) return null;
+	const total = usageCount(usage, "total_tokens") ?? input + output;
+	if (total < input + output) return null;
+	return {
+		input_tokens: input,
+		output_tokens: output,
+		total_tokens: total,
+		cache_hit_tokens: normalizedHit,
+		cache_miss_tokens: normalizedMiss
+	};
+}
+var ProviderExecutionError = class extends Error {
+	code;
+	outcome;
+	providerRequestId;
+	constructor(message, options = {}) {
+		super(message);
+		this.name = "ProviderExecutionError";
+		this.code = options.code ?? "provider_execution_failed";
+		this.outcome = options.outcome ?? "failed";
+		this.providerRequestId = options.providerRequestId ?? null;
+	}
+};
+async function boundedResponseText(response) {
+	const declaredLength = Number(response.headers.get("content-length"));
+	if (Number.isFinite(declaredLength) && declaredLength > MAX_PROVIDER_RESPONSE_BYTES) throw new ProviderExecutionError("provider response is too large", { code: "provider_response_too_large" });
+	const reader = response.body?.getReader();
+	if (!reader) {
+		const text = await response.text();
+		if (Buffer.byteLength(text, "utf8") > MAX_PROVIDER_RESPONSE_BYTES) throw new ProviderExecutionError("provider response is too large", { code: "provider_response_too_large" });
+		return text;
+	}
+	const chunks = [];
+	let size = 0;
+	for (;;) {
+		const { done, value } = await reader.read();
+		if (done) break;
+		const chunk = Buffer.from(value);
+		size += chunk.byteLength;
+		if (size > MAX_PROVIDER_RESPONSE_BYTES) {
+			await reader.cancel().catch(() => void 0);
+			throw new ProviderExecutionError("provider response is too large", { code: "provider_response_too_large" });
+		}
+		chunks.push(chunk);
+	}
+	return Buffer.concat(chunks, size).toString("utf8");
+}
+async function providerCompletion(target, task, options = {}) {
+	const configuredTimeout = Number(process.env.TMCRA_LOCAL_PROVIDER_TIMEOUT_MS || DEFAULT_PROVIDER_TIMEOUT_MS);
+	const timeoutMs = Number.isFinite(configuredTimeout) ? Math.max(1e3, Math.min(9e5, configuredTimeout)) : DEFAULT_PROVIDER_TIMEOUT_MS;
+	const controller = new AbortController();
+	const abortFromParent = () => controller.abort(options.signal?.reason);
+	if (options.signal?.aborted) controller.abort(options.signal.reason);
+	else options.signal?.addEventListener("abort", abortFromParent, { once: true });
+	const timeout = setTimeout(() => controller.abort(/* @__PURE__ */ new Error("provider timeout")), timeoutMs);
+	timeout.unref?.();
+	try {
+		const body = {
+			...task.request,
+			model: target.model
+		};
+		if (target.provider === "deepseek") {
+			if (body.response_format?.type === "json_schema") body.response_format = { type: "json_object" };
+			body.thinking = { type: "disabled" };
+			body.enable_thinking = false;
+		}
+		let response;
+		try {
+			response = await (options.fetchImpl ?? fetch)(`${target.baseUrl}/chat/completions`, {
+				method: "POST",
+				headers: {
+					Accept: "application/json",
+					"Content-Type": "application/json",
+					...target.apiKey ? { Authorization: `Bearer ${target.apiKey}` } : {}
+				},
+				redirect: "error",
+				body: JSON.stringify(body),
+				signal: controller.signal
+			});
+		} catch (error) {
+			throw new ProviderExecutionError("provider transport outcome is unresolved", {
+				code: error instanceof Error && error.name === "AbortError" ? "provider_timeout" : "provider_transport_error",
+				outcome: "unknown"
+			});
+		}
+		let text;
+		try {
+			text = await boundedResponseText(response);
+		} catch (error) {
+			if (error instanceof ProviderExecutionError) throw error;
+			throw new ProviderExecutionError("provider response outcome is unresolved", {
+				code: error instanceof Error && error.name === "AbortError" ? "provider_timeout" : "provider_response_error",
+				outcome: "unknown"
+			});
+		}
+		let payload;
+		try {
+			const parsed = text ? JSON.parse(text) : {};
+			if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("not an object");
+			payload = parsed;
+		} catch {
+			throw new ProviderExecutionError("provider returned non-JSON HTTP content", { code: "provider_invalid_http_json" });
+		}
+		const providerRequestId = typeof payload.id === "string" ? payload.id.slice(0, 200) : null;
+		if (!response.ok) throw new ProviderExecutionError(`provider returned HTTP ${response.status}`, {
+			code: `provider_http_${response.status}`,
+			outcome: response.status >= 500 || [408, 425].includes(response.status) ? "unknown" : "failed",
+			providerRequestId
+		});
+		const choices = payload.choices;
+		if (!Array.isArray(choices) || choices.length !== 1) throw new ProviderExecutionError("provider response choice count is invalid", {
+			code: "provider_invalid_choices",
+			providerRequestId
+		});
+		const choice = choices[0];
+		if (!choice || typeof choice !== "object" || Array.isArray(choice)) throw new ProviderExecutionError("provider choice is invalid", {
+			code: "provider_invalid_choice",
+			providerRequestId
+		});
+		const choiceRecord = choice;
+		if (choiceRecord.finish_reason !== "stop") throw new ProviderExecutionError("provider response did not finish cleanly", {
+			code: "provider_incomplete_response",
+			providerRequestId
+		});
+		const message = choiceRecord.message;
+		const content = message && typeof message === "object" && !Array.isArray(message) ? message.content : void 0;
+		let output;
+		try {
+			output = typeof content === "string" ? JSON.parse(content) : content;
+		} catch {
+			throw new ProviderExecutionError("provider completion is not valid JSON", {
+				code: "provider_invalid_completion_json",
+				providerRequestId
+			});
+		}
+		if (!output || typeof output !== "object" || Array.isArray(output)) throw new ProviderExecutionError("provider completion must be one JSON object", {
+			code: "provider_completion_not_object",
+			providerRequestId
+		});
+		const serialized = JSON.stringify(output);
+		if (Buffer.byteLength(serialized, "utf8") > MAX_TASK_OUTPUT_BYTES) throw new ProviderExecutionError("provider completion is too large", {
+			code: "provider_completion_too_large",
+			providerRequestId
+		});
+		return {
+			output,
+			usage: normalizeUsage(payload.usage),
+			providerRequestId,
+			responseSha256: createHash("sha256").update(serialized).digest("hex")
+		};
+	} finally {
+		clearTimeout(timeout);
+		options.signal?.removeEventListener("abort", abortFromParent);
+	}
+}
+async function executeTask(stage, rawTask, target, client, options) {
+	const task = validateTask(rawTask, stage);
+	await client.startUserProviderTask(task.task_id, task.lease_token, { signal: options.signal });
+	let heartbeatInFlight = false;
+	const heartbeat = setInterval(() => {
+		if (heartbeatInFlight || options.signal?.aborted) return;
+		heartbeatInFlight = true;
+		client.heartbeatUserProviderTask(task.task_id, task.lease_token, {
+			signal: options.signal,
+			retry: false
+		}).catch(() => void 0).finally(() => {
+			heartbeatInFlight = false;
+		});
+	}, 3e4);
+	heartbeat.unref?.();
+	try {
+		const result = await providerCompletion(target, task, options);
+		await client.completeUserProviderTask(task.task_id, {
+			lease_token: task.lease_token,
+			provider: target.provider,
+			model: target.model,
+			output: result.output,
+			usage: result.usage,
+			provider_request_id: result.providerRequestId
+		}, { signal: options.signal });
+		options.onEvent?.({
+			kind: "completed",
+			taskId: task.task_id,
+			stage,
+			operation: task.operation,
+			provider: target.provider,
+			model: target.model,
+			requestSha256: task.request_sha256,
+			responseSha256: result.responseSha256
+		});
+	} catch (error) {
+		if (!(error instanceof ProviderExecutionError)) throw error;
+		await client.failUserProviderTask(task.task_id, {
+			lease_token: task.lease_token,
+			provider: target.provider,
+			model: target.model,
+			outcome: error.outcome,
+			error_code: error.code
+		}, { signal: options.signal });
+		options.onEvent?.({
+			kind: "failed",
+			taskId: task.task_id,
+			stage,
+			operation: task.operation,
+			provider: target.provider,
+			model: target.model,
+			outcome: error.outcome,
+			code: error.code,
+			requestSha256: task.request_sha256
+		});
+	} finally {
+		clearInterval(heartbeat);
+	}
+}
+async function executeAvailableLocalProviderTasks(options) {
+	const maxTasks = options.maxTasks ?? 8;
+	if (!Number.isSafeInteger(maxTasks) || maxTasks < 1 || maxTasks > 100) throw new RangeError("maxTasks must be an integer from 1 through 100");
+	let executed = 0;
+	let stageCursor = 0;
+	for (let index = 0; index < maxTasks && !options.signal?.aborted; index += 1) {
+		let claimed = false;
+		for (let offset = 0; offset < STAGES.length; offset += 1) {
+			const stageIndex = (stageCursor + offset) % STAGES.length;
+			const stage = STAGES[stageIndex];
+			if (!localProviderStageReady(options.providerConfig, stage)) continue;
+			const response = await options.client.claimUserProviderTask(stage, {
+				signal: options.signal,
+				retry: false
+			});
+			if (!response.task) continue;
+			claimed = true;
+			stageCursor = (stageIndex + 1) % STAGES.length;
+			await executeTask(stage, response.task, resolvedLocalProviderStage(options.providerConfig, stage), options.client, options);
+			executed += 1;
+			break;
+		}
+		if (!claimed) break;
+	}
+	return { executed };
+}
+async function runLocalProviderExecutor(options) {
+	const idleMs = options.idleMs ?? DEFAULT_IDLE_MS;
+	let failureDelay = idleMs;
+	let lastFailure = "";
+	while (!options.signal?.aborted) try {
+		const providerConfig = await (options.readConfig ?? readLocalProviderConfig)();
+		if (!providerConfig || !STAGES.some((stage) => localProviderStageReady(providerConfig, stage))) {
+			failureDelay = idleMs;
+			lastFailure = "";
+			await delay(idleMs, options.signal);
+			continue;
+		}
+		const result = await executeAvailableLocalProviderTasks({
+			client: await options.clientFactory(),
+			providerConfig,
+			maxTasks: 8,
+			signal: options.signal,
+			onEvent: options.onEvent
+		});
+		failureDelay = idleMs;
+		lastFailure = "";
+		if (result.executed > 0) continue;
+		await delay(idleMs, options.signal);
+	} catch (error) {
+		if (options.signal?.aborted) break;
+		const code = error instanceof Error ? `${error.name}:${error.message}` : String(error);
+		if (code !== lastFailure) {
+			options.onEvent?.({
+				kind: "waiting",
+				code: code.slice(0, 160)
+			});
+			lastFailure = code;
+		}
+		await delay(failureDelay, options.signal);
+		failureDelay = Math.min(3e4, Math.max(idleMs, failureDelay * 2));
+	}
+}
+Object.freeze({
+	normalizeUsage,
+	providerCompletion,
+	validateTask
+});
+//#endregion
 //#region src/index.ts
 /**
 * TMCRA automatic-memory plugin for DeepSeek Harness.
@@ -1677,22 +2208,33 @@ async function resolveCredential(ctx, reference) {
 	const credentials = ctx.get("credentials");
 	return cleanText(credentials === void 0 ? process.env[ref] : (await credentials.resolve(ref))?.value, reference);
 }
-async function resolveOperationConfig(ctx, config) {
+async function resolveConnectionConfig(ctx, config) {
 	const baseUrl = await resolveCredential(ctx, cleanText(config.baseUrlEnv, "baseUrlEnv") ?? DEFAULT_BASE_URL_ENV) ?? cleanText(config.baseUrl, "baseUrl") ?? DEFAULT_BASE_URL;
 	const apiKeyReference = cleanText(config.apiKeyEnv, "apiKeyEnv") ?? DEFAULT_API_KEY_ENV;
 	const apiKey = await resolveCredential(ctx, apiKeyReference);
 	if (!apiKey) throw new Error(`tmcra-memory: credential ${apiKeyReference} is not configured`);
+	return {
+		apiKey,
+		baseUrl
+	};
+}
+async function resolveOperationConfig(ctx, config) {
+	const connection = await resolveConnectionConfig(ctx, config);
 	const globalReference = cleanText(config.globalScopeEnv, "globalScopeEnv") ?? DEFAULT_GLOBAL_SCOPE_ENV;
 	const globalScope = cleanText(config.globalScope, "globalScope") ?? await resolveCredential(ctx, globalReference);
 	if (!globalScope) throw new Error(`tmcra-memory: exact global scope ${globalReference} is not configured`);
 	const projectPrefixReference = cleanText(config.projectScopePrefixEnv, "projectScopePrefixEnv") ?? DEFAULT_PROJECT_SCOPE_PREFIX_ENV;
 	const projectScopePrefix = cleanText(config.projectScopePrefix, "projectScopePrefix") ?? await resolveCredential(ctx, projectPrefixReference);
 	if (!projectScopePrefix) throw new Error(`tmcra-memory: project scope prefix ${projectPrefixReference} is not configured`);
+	const providerConfig = await readLocalProviderConfig().catch(() => null);
 	return {
-		apiKey,
-		baseUrl,
+		...connection,
 		globalScope: validateScope(globalScope, "globalScope"),
-		projectScopePrefix: validateScope(projectScopePrefix, "projectScopePrefix")
+		projectScopePrefix: validateScope(projectScopePrefix, "projectScopePrefix"),
+		localProviderExecution: {
+			writer: providerConfig !== null && localProviderStageReady(providerConfig, "writer"),
+			organizer: providerConfig !== null && localProviderStageReady(providerConfig, "organizer")
+		}
 	};
 }
 function recalledMessage(prepared) {
@@ -1718,7 +2260,8 @@ function lifecycleFor(config, operation, agent, projectScope, pendingQueue, stag
 		defaultTimeoutMs: stage === "recall" ? validatePositiveTimeout(config.recallTimeoutMs, 3e4, "recallTimeoutMs") : validatePositiveTimeout(config.ingestTimeoutMs, 3e4, "ingestTimeoutMs"),
 		clientPlatform: "deepseek_harness",
 		integrationId: "tmcra-deepseek-harness",
-		agentId: assistantAgentId
+		agentId: assistantAgentId,
+		localProviderExecution: operation.localProviderExecution
 	}), {
 		projectScope,
 		globalScope: operation.globalScope,
@@ -1734,6 +2277,14 @@ function lifecycleFor(config, operation, agent, projectScope, pendingQueue, stag
 function warn(ctx, stage, error) {
 	ctx.logger.warn(`tmcra-memory: ${stage} failed; the Harness turn will continue`);
 	ctx.logger.warn(error);
+}
+function reportLocalProviderEvent(ctx, event) {
+	if (event.kind === "completed") return;
+	if (event.kind === "failed") {
+		ctx.logger.warn(`tmcra-memory: local ${event.stage ?? "provider"} task ${event.taskId ?? "unknown"} ended ${event.outcome ?? "failed"} (${event.code ?? "provider_execution_failed"})`);
+		return;
+	}
+	ctx.logger.warn(`tmcra-memory: local provider executor is waiting (${event.code ?? "unavailable"})`);
 }
 /** Register automatic TMCRA memory at native Harness lifecycle seams. */
 function apply(ctx, config) {
@@ -1751,6 +2302,31 @@ function apply(ctx, config) {
 	ctx.effect(() => async () => {
 		await Promise.allSettled([...detached]);
 	}, "tmcra-memory: drain writeback");
+	ctx.effect(() => {
+		const controller = new AbortController();
+		const task = runLocalProviderExecutor({
+			signal: controller.signal,
+			clientFactory: async () => {
+				const connection = await resolveConnectionConfig(ctx, config);
+				return new TMCRAClient({
+					baseUrl: connection.baseUrl,
+					apiKey: connection.apiKey,
+					defaultTimeoutMs: validatePositiveTimeout(config.ingestTimeoutMs, 3e4, "ingestTimeoutMs"),
+					clientPlatform: "deepseek_harness",
+					integrationId: "tmcra-deepseek-harness"
+				});
+			},
+			onEvent: (event) => reportLocalProviderEvent(ctx, event)
+		});
+		task.catch((error) => reportLocalProviderEvent(ctx, {
+			kind: "waiting",
+			code: error instanceof Error ? error.message.slice(0, 160) : "executor_stopped"
+		}));
+		return async () => {
+			controller.abort();
+			await task;
+		};
+	}, "tmcra-memory: local provider executor");
 	const reconcilePending = async (agent, operation, projectScope) => {
 		await writebackByProject.get(projectScope);
 		if ((await pendingQueue.list()).length === 0) return;

@@ -29,6 +29,14 @@ import {
   TMCRAMemoryLifecycle,
 } from "./sdk/index.ts";
 import type { EvidenceMode, JsonValue } from "./sdk/index.ts";
+import {
+  localProviderStageReady,
+  readLocalProviderConfig,
+} from "./local-provider-config.ts";
+import {
+  runLocalProviderExecutor,
+  type LocalProviderExecutorEvent,
+} from "./local-provider-executor.ts";
 
 export const name = "tmcra-memory";
 export const inject = ["agents"];
@@ -98,7 +106,13 @@ interface ResolvedOperationConfig {
   baseUrl: string;
   globalScope: string;
   projectScopePrefix: string;
+  localProviderExecution: {
+    writer: boolean;
+    organizer: boolean;
+  };
 }
+
+type ResolvedConnectionConfig = Pick<ResolvedOperationConfig, "apiKey" | "baseUrl">;
 
 function cleanText(value: string | undefined, field: string): string | undefined {
   if (value === undefined) return undefined;
@@ -377,7 +391,7 @@ async function resolveCredential(ctx: Context, reference: string): Promise<strin
   return cleanText(value, reference);
 }
 
-async function resolveOperationConfig(ctx: Context, config: Config): Promise<ResolvedOperationConfig> {
+async function resolveConnectionConfig(ctx: Context, config: Config): Promise<ResolvedConnectionConfig> {
   const baseUrlReference = cleanText(config.baseUrlEnv, "baseUrlEnv") ?? DEFAULT_BASE_URL_ENV;
   const baseUrl = await resolveCredential(ctx, baseUrlReference)
     ?? cleanText(config.baseUrl, "baseUrl")
@@ -385,6 +399,11 @@ async function resolveOperationConfig(ctx: Context, config: Config): Promise<Res
   const apiKeyReference = cleanText(config.apiKeyEnv, "apiKeyEnv") ?? DEFAULT_API_KEY_ENV;
   const apiKey = await resolveCredential(ctx, apiKeyReference);
   if (!apiKey) throw new Error(`tmcra-memory: credential ${apiKeyReference} is not configured`);
+  return { apiKey, baseUrl };
+}
+
+async function resolveOperationConfig(ctx: Context, config: Config): Promise<ResolvedOperationConfig> {
+  const connection = await resolveConnectionConfig(ctx, config);
   const globalReference = cleanText(config.globalScopeEnv, "globalScopeEnv") ?? DEFAULT_GLOBAL_SCOPE_ENV;
   const globalScope = cleanText(config.globalScope, "globalScope") ?? await resolveCredential(ctx, globalReference);
   if (!globalScope) throw new Error(`tmcra-memory: exact global scope ${globalReference} is not configured`);
@@ -395,11 +414,15 @@ async function resolveOperationConfig(ctx: Context, config: Config): Promise<Res
   if (!projectScopePrefix) {
     throw new Error(`tmcra-memory: project scope prefix ${projectPrefixReference} is not configured`);
   }
+  const providerConfig = await readLocalProviderConfig().catch(() => null);
   return {
-    apiKey,
-    baseUrl,
+    ...connection,
     globalScope: validateScope(globalScope, "globalScope"),
     projectScopePrefix: validateScope(projectScopePrefix, "projectScopePrefix"),
+    localProviderExecution: {
+      writer: providerConfig !== null && localProviderStageReady(providerConfig, "writer"),
+      organizer: providerConfig !== null && localProviderStageReady(providerConfig, "organizer"),
+    },
   };
 }
 
@@ -434,6 +457,7 @@ function lifecycleFor(
     clientPlatform: "deepseek_harness",
     integrationId: "tmcra-deepseek-harness",
     agentId: assistantAgentId,
+    localProviderExecution: operation.localProviderExecution,
   });
   return new TMCRAMemoryLifecycle(client, {
     projectScope,
@@ -453,6 +477,17 @@ function lifecycleFor(
 function warn(ctx: Context, stage: "recall" | "ingest", error: unknown): void {
   ctx.logger.warn(`tmcra-memory: ${stage} failed; the Harness turn will continue`);
   ctx.logger.warn(error);
+}
+
+function reportLocalProviderEvent(ctx: Context, event: LocalProviderExecutorEvent): void {
+  if (event.kind === "completed") return;
+  if (event.kind === "failed") {
+    ctx.logger.warn(
+      `tmcra-memory: local ${event.stage ?? "provider"} task ${event.taskId ?? "unknown"} ended ${event.outcome ?? "failed"} (${event.code ?? "provider_execution_failed"})`,
+    );
+    return;
+  }
+  ctx.logger.warn(`tmcra-memory: local provider executor is waiting (${event.code ?? "unavailable"})`);
 }
 
 /** Register automatic TMCRA memory at native Harness lifecycle seams. */
@@ -477,6 +512,31 @@ export function apply(ctx: Context, config: Config): void {
     () => async () => { await Promise.allSettled([...detached]); },
     "tmcra-memory: drain writeback",
   );
+  ctx.effect(() => {
+    const controller = new AbortController();
+    const task = runLocalProviderExecutor({
+      signal: controller.signal,
+      clientFactory: async () => {
+        const connection = await resolveConnectionConfig(ctx, config);
+        return new TMCRAClient({
+          baseUrl: connection.baseUrl,
+          apiKey: connection.apiKey,
+          defaultTimeoutMs: validatePositiveTimeout(config.ingestTimeoutMs, 30_000, "ingestTimeoutMs"),
+          clientPlatform: "deepseek_harness",
+          integrationId: "tmcra-deepseek-harness",
+        });
+      },
+      onEvent: (event) => reportLocalProviderEvent(ctx, event),
+    });
+    void task.catch((error) => reportLocalProviderEvent(ctx, {
+      kind: "waiting",
+      code: error instanceof Error ? error.message.slice(0, 160) : "executor_stopped",
+    }));
+    return async () => {
+      controller.abort();
+      await task;
+    };
+  }, "tmcra-memory: local provider executor");
 
   const reconcilePending = async (
     agent: Agent,

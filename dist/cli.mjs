@@ -3,9 +3,9 @@ import { createHash, randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { chmod, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { chmod, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { withFileLock, writeFileAtomic } from "@deepseek-ai/dsh-atomic-write";
 import { Document, isMap, parseDocument } from "yaml";
 //#region src/device-auth.ts
@@ -58,7 +58,7 @@ async function postJson(fetchImpl, url, body) {
 			headers: {
 				Accept: "application/json",
 				"Content-Type": "application/json",
-				"User-Agent": "dsh-tmcra-memory/0.1.6"
+				"User-Agent": "dsh-tmcra-memory/0.1.7"
 			},
 			body: JSON.stringify(body),
 			signal: controller.signal
@@ -277,7 +277,7 @@ async function authorizeDeepSeekHarness(options = {}) {
 	const started = await postJson(fetchImpl, `${authBaseUrl}/api/device/v1/authorizations`, {
 		clientId: CLIENT_ID,
 		clientName: `DeepSeek Harness (${platform()} ${process.arch})`,
-		clientVersion: "0.1.6",
+		clientVersion: "0.1.7",
 		codeChallenge: challenge,
 		codeChallengeMethod: "S256"
 	});

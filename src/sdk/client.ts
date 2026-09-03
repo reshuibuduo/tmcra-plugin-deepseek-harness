@@ -38,6 +38,11 @@ import {
   type ScopeTokenCreateRequest,
   type ScopeTokenView,
   type UsageCosts,
+  type UserProviderTaskClaim,
+  type UserProviderTaskCompletion,
+  type UserProviderTaskFailure,
+  type UserProviderTaskStage,
+  type UserProviderTaskStatus,
   type WebhookCreateRequest,
   type WebhookView,
   isTerminalJobStatus,
@@ -115,6 +120,11 @@ export interface TMCRAClientOptions {
   integrationId?: string;
   /** Optional invoking Agent ID for multi-agent attribution. */
   agentId?: string;
+  /** Route configured memory-model stages to the authenticated local executor. */
+  localProviderExecution?: {
+    writer?: boolean;
+    organizer?: boolean;
+  };
 }
 
 interface InternalRequestOptions extends RequestOptions {
@@ -294,6 +304,7 @@ export class TMCRAClient {
   private readonly defaultTimeoutMs?: number;
   private readonly retryPolicy: Required<RetryPolicy>;
   private readonly defaultHeaders?: HeadersInit;
+  private readonly localProviderExecution: Readonly<{ writer: boolean; organizer: boolean }>;
 
   constructor(options: TMCRAClientOptions) {
     const resolvedBaseUrl = options.baseUrl ?? "https://api.tmcra.com";
@@ -317,6 +328,10 @@ export class TMCRAClient {
       throw new RangeError("retryStatusCodes must contain integers");
     }
     this.retryPolicy = retry;
+    this.localProviderExecution = {
+      writer: options.localProviderExecution?.writer === true,
+      organizer: options.localProviderExecution?.organizer === true,
+    };
     this.defaultHeaders = mergeHeaders(
       {
         "X-TMCRA-Client-Platform": options.clientPlatform ?? "typescript",
@@ -402,7 +417,15 @@ export class TMCRAClient {
     return this.requestJson<JobView>(`v1/scopes/${encodeURIComponent(scopeName)}/ingest`, {
       method: "POST",
       body: JSON.stringify(payload),
-    }, { ...options, headers: mergeHeaders(options.headers, { "Idempotency-Key": idempotencyKey }), retryMode: "safe" });
+    }, {
+      ...options,
+      headers: mergeHeaders(
+        options.headers,
+        this.ingestExecutionHeaders(),
+        { "Idempotency-Key": idempotencyKey },
+      ),
+      retryMode: "safe",
+    });
   }
 
   async bulkIngest(scopeName: string, body: BulkIngestRequest, options: RequestOptions = {}): Promise<BulkIngestResponse> {
@@ -418,7 +441,15 @@ export class TMCRAClient {
     return this.requestJson<BulkIngestResponse>(`v1/scopes/${encodeURIComponent(scopeName)}/ingest/batch`, {
       method: "POST",
       body: JSON.stringify(payload),
-    }, { ...options, headers: mergeHeaders(options.headers, { "Idempotency-Key": retryKey }), retryMode: "safe" });
+    }, {
+      ...options,
+      headers: mergeHeaders(
+        options.headers,
+        this.ingestExecutionHeaders(),
+        { "Idempotency-Key": retryKey },
+      ),
+      retryMode: "safe",
+    });
   }
 
   async consolidate(scopeName: string, options: IdempotentRequestOptions = {}): Promise<JobView> {
@@ -426,7 +457,67 @@ export class TMCRAClient {
     return this.requestJson<JobView>(`v1/scopes/${encodeURIComponent(scopeName)}/consolidate`, {
       method: "POST",
       body: "{}",
-    }, { ...options, headers: mergeHeaders(options.headers, { "Idempotency-Key": idempotencyKey }), retryMode: "safe" });
+    }, {
+      ...options,
+      headers: mergeHeaders(
+        options.headers,
+        this.localProviderExecution.organizer
+          ? { "X-TMCRA-Organizer-Execution": "user-provider" }
+          : undefined,
+        { "Idempotency-Key": idempotencyKey },
+      ),
+      retryMode: "safe",
+    });
+  }
+
+  async claimUserProviderTask(
+    stage: UserProviderTaskStage,
+    options: RequestOptions = {},
+  ): Promise<UserProviderTaskClaim> {
+    return this.requestJson<UserProviderTaskClaim>("v1/provider-tasks/claim", {
+      method: "POST",
+      body: JSON.stringify({ stage }),
+    }, { ...options, retryMode: "never" });
+  }
+
+  async startUserProviderTask(
+    taskId: string,
+    leaseToken: string,
+    options: RequestOptions = {},
+  ): Promise<UserProviderTaskStatus> {
+    return this.providerTaskLeaseRequest(taskId, "started", leaseToken, options);
+  }
+
+  async heartbeatUserProviderTask(
+    taskId: string,
+    leaseToken: string,
+    options: RequestOptions = {},
+  ): Promise<UserProviderTaskStatus> {
+    return this.providerTaskLeaseRequest(taskId, "heartbeat", leaseToken, options);
+  }
+
+  async completeUserProviderTask(
+    taskId: string,
+    body: UserProviderTaskCompletion,
+    options: RequestOptions = {},
+  ): Promise<UserProviderTaskStatus> {
+    return this.requestJson<UserProviderTaskStatus>(
+      `v1/provider-tasks/${encodeURIComponent(taskId)}/complete`,
+      { method: "POST", body: JSON.stringify(body) },
+      { ...options, retryMode: "safe" },
+    );
+  }
+
+  async failUserProviderTask(
+    taskId: string,
+    body: UserProviderTaskFailure,
+    options: RequestOptions = {},
+  ): Promise<UserProviderTaskStatus> {
+    return this.requestJson<UserProviderTaskStatus>(
+      `v1/provider-tasks/${encodeURIComponent(taskId)}/fail`,
+      { method: "POST", body: JSON.stringify(body) },
+      { ...options, retryMode: "safe" },
+    );
   }
 
   async recall(scopeName: string, body: RecallRequest, options: RequestOptions = {}): Promise<RecallResponse> {
@@ -697,6 +788,31 @@ export class TMCRAClient {
     const key = value ?? randomIdempotencyKey();
     if (key.length < 8 || key.length > 200) throw new RangeError("idempotencyKey must be 8-200 characters");
     return key;
+  }
+
+  private ingestExecutionHeaders(): HeadersInit | undefined {
+    if (!this.localProviderExecution.writer && !this.localProviderExecution.organizer) return undefined;
+    return {
+      ...(this.localProviderExecution.writer
+        ? { "X-TMCRA-Writer-Execution": "user-provider" }
+        : {}),
+      ...(this.localProviderExecution.organizer
+        ? { "X-TMCRA-Organizer-Execution": "user-provider" }
+        : {}),
+    };
+  }
+
+  private providerTaskLeaseRequest(
+    taskId: string,
+    action: "started" | "heartbeat",
+    leaseToken: string,
+    options: RequestOptions,
+  ): Promise<UserProviderTaskStatus> {
+    return this.requestJson<UserProviderTaskStatus>(
+      `v1/provider-tasks/${encodeURIComponent(taskId)}/${action}`,
+      { method: "POST", body: JSON.stringify({ lease_token: leaseToken }) },
+      { ...options, retryMode: "safe" },
+    );
   }
 
   private async requestJson<T>(path: string, init: RequestInit, options: InternalRequestOptions): Promise<T> {

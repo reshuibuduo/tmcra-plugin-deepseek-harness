@@ -61,7 +61,7 @@ Agent 回答前，TMCRA 会找回与当前问题有关的用户要求、决策�
 ## 安装技术预览包
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.6/dsh-tmcra-memory-0.1.6.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.7/dsh-tmcra-memory-0.1.7.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
@@ -69,9 +69,9 @@ dsh web
 
 Harness Web UI 默认地址为 `http://127.0.0.1:3080`。
 
-压缩包内含 `cordis.patch.yml`，安装后会自动加入指定 Profile 的配置层。建议使用 Release 中已经构建好的 `.tgz`。下载到本地后，也可以执行 `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.6.tgz`。从 Git 源码安装可能还需要在 `pnpm` 中单独允许构建脚本。
+压缩包内含 `cordis.patch.yml`，安装后会自动加入指定 Profile 的配置层。建议使用 Release 中已经构建好的 `.tgz`。下载到本地后，也可以执行 `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.7.tgz`。从 Git 源码安装可能还需要在 `pnpm` 中单独允许构建脚本。
 
-DSH `0.1.1-rc.2` 的 Windows 版仍可能把包含空格或非 ASCII 字符的本地包路径错误重组。请先把压缩包复制到纯 ASCII 短路径，例如 `D:\\dsh-packages\\dsh-tmcra-memory-0.1.6.tgz`；上面的 Release URL 不受影响。
+DSH `0.1.1-rc.2` 的 Windows 版仍可能把包含空格或非 ASCII 字符的本地包路径错误重组。请先把压缩包复制到纯 ASCII 短路径，例如 `D:\\dsh-packages\\dsh-tmcra-memory-0.1.7.tgz`；上面的 Release URL 不受影响。
 
 ## 连接 TMCRA 账号
 
@@ -102,7 +102,7 @@ dsh plugin --profile web exec dsh-tmcra-memory setup
 
 命令会在 `127.0.0.1` 启动带随机令牌的临时配置页。Writer 与后台整理可以共用一个模型服务，也可以分别填写 Provider、Base URL、模型名称和 API Key。Codex 与 Harness 共用 `~/.config/tmcra/local-providers.json`；Key 只保存在当前系统用户的本地文件中，连接测试时只发往填写的模型服务。Provider 或 Base URL 改变后需要重新填写 Key。macOS/Linux 使用 `0600` 权限；Windows 移除继承 ACL，只授权当前用户与 SYSTEM。
 
-此版本完成配置页、输入校验、脱敏状态和连接测试。生产写入与整理任务继续使用现有 TMCRA 服务端链路；客户端任务协议与本地执行器接通后，这些模型配置才能实际接管任务。
+Harness 运行期间，保存后的配置立即生效。写入请求会把 Writer 任务（包括强制慢速阶段）交给经过账号认证的本机执行器；显式整理请求同样会把后台 Organizer 任务交给本机。执行器只领取由当前设备凭据创建的任务，调用所配置的 OpenAI 兼容接口，并仅向 TMCRA 回传解析后的 JSON、标准化 Token 用量和 Provider Request ID。模型 API Key 与供应商原始响应始终留在当前用户的本机进程。
 
 插件默认配置：
 

@@ -61,7 +61,7 @@ During the initial release period, TMCRA accounts are free to use with no memory
 ## Install the preview tarball
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.6/dsh-tmcra-memory-0.1.6.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.7/dsh-tmcra-memory-0.1.7.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
@@ -69,9 +69,9 @@ dsh web
 
 Harness serves its Web UI at `http://127.0.0.1:3080` by default.
 
-The package contributes `cordis.patch.yml`, so the install command activates the plugin in the selected profile. Prefer the prebuilt release tarball. A locally downloaded copy can also be installed with `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.6.tgz`. Installing from a Git source may require an explicit `pnpm` build-script allowance.
+The package contributes `cordis.patch.yml`, so the install command activates the plugin in the selected profile. Prefer the prebuilt release tarball. A locally downloaded copy can also be installed with `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.7.tgz`. Installing from a Git source may require an explicit `pnpm` build-script allowance.
 
-DSH `0.1.1-rc.2` on Windows can still re-anchor a local package path incorrectly when the path contains spaces or non-ASCII characters. Copy the tarball to a short ASCII path first, such as `D:\\dsh-packages\\dsh-tmcra-memory-0.1.6.tgz`. The release URL above is not affected.
+DSH `0.1.1-rc.2` on Windows can still re-anchor a local package path incorrectly when the path contains spaces or non-ASCII characters. Copy the tarball to a short ASCII path first, such as `D:\\dsh-packages\\dsh-tmcra-memory-0.1.7.tgz`. The release URL above is not affected.
 
 ## Connect your TMCRA account
 
@@ -102,7 +102,7 @@ dsh plugin --profile web exec dsh-tmcra-memory setup
 
 The command starts a random-token setup session bound to `127.0.0.1`. Writer and background organizer can share one provider or use separate Provider, Base URL, model, and API Key values. The Codex and Harness plugins share `~/.config/tmcra/local-providers.json`. Keys stay in that local user file and are sent only to the configured provider during a connection test. Changing Provider or Base URL requires the key to be entered again. The file uses mode `0600` on macOS/Linux; on Windows it removes inherited ACLs and grants access only to the current user and SYSTEM.
 
-This release provides the settings UI, validation, redacted status, and connection test. Production ingest and consolidation jobs continue to use the existing TMCRA service pipeline until the client task protocol and local executor are connected.
+The saved configuration is active immediately while Harness is running. Ingest requests route Writer work, including a forced slow stage, to the authenticated local executor. Explicit consolidation requests route the background organizer the same way. The executor leases only tasks created with this device credential, calls the configured OpenAI-compatible endpoint, and returns the parsed JSON result, normalized token usage, and provider request ID. Provider keys and raw provider response envelopes stay in the current user's local process.
 
 Default plugin configuration:
 

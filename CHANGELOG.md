@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.7 - 2026-09-04
+
+- Activate the configured Writer and background-organizer providers through the authenticated TMCRA user-provider task protocol.
+- Keep provider credentials and raw response envelopes in the local Harness process while returning only validated JSON results and normalized usage.
+- Add fair stage scheduling, lease heartbeats, bounded provider responses, shutdown cancellation, failure backoff, and end-to-end executor contracts.
+
 ## 0.1.6 - 2026-09-04
 
 - Add a local setup command and loopback settings UI for separate Writer and background-organizer providers.

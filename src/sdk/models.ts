@@ -15,6 +15,69 @@ export type EvidenceMode = "raw" | "auto" | "compiled";
 export type RecallProfile = "quality" | "interactive";
 export type MemoryGraphLayer = "slow" | "fast" | "source";
 export type JobStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled";
+export type UserProviderTaskStage = "writer" | "organizer";
+export type UserProviderTaskState = "queued" | "leased" | "running" | "completed" | "failed" | "unknown";
+
+export interface UserProviderModelMessage {
+  role: "system" | "user" | "assistant";
+  content: string;
+}
+
+export interface UserProviderModelRequest {
+  schema_version: "tmcra.openai-compatible-request.1";
+  messages: UserProviderModelMessage[];
+  temperature: 0;
+  max_tokens: number;
+  response_format: Record<string, JsonValue>;
+}
+
+export interface UserProviderTaskLease {
+  schema_version: "tmcra.user-provider-task.1";
+  task_id: string;
+  stage: UserProviderTaskStage;
+  operation: string;
+  request_sha256: string;
+  request: UserProviderModelRequest;
+  lease_token: string;
+  lease_expires_at: number;
+}
+
+export interface UserProviderTaskClaim {
+  task: UserProviderTaskLease | null;
+  retry_after_seconds: number;
+}
+
+export interface UserProviderUsage {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_hit_tokens: number;
+  cache_miss_tokens: number;
+}
+
+export interface UserProviderTaskCompletion {
+  lease_token: string;
+  provider: string;
+  model: string;
+  output: Record<string, JsonValue>;
+  usage?: UserProviderUsage | null;
+  provider_request_id?: string | null;
+}
+
+export interface UserProviderTaskFailure {
+  lease_token: string;
+  provider: string;
+  model: string;
+  outcome: "failed" | "unknown";
+  error_code: string;
+}
+
+export interface UserProviderTaskStatus {
+  task_id: string;
+  state: UserProviderTaskState;
+  lease_expires_at: number | null;
+  idempotent_replay: boolean;
+}
 
 export interface MemoryMessage {
   message_id: string;
