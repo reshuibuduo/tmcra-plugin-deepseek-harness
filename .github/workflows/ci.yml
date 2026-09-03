@@ -32,7 +32,8 @@ jobs:
       - run: npm run test:dsh-compat
       - run: npm run pack:check
       - name: Audit production dependencies
+        env:
+          npm_config_fetch_retries: 0
         run: >-
-          pnpm --config.fetch-retries=0 --config.fetch-timeout=30000
-          audit --prod --ignore-registry-errors
+          pnpm audit --prod --ignore-registry-errors
           --registry=https://registry.npmjs.org
