@@ -61,7 +61,7 @@ During the initial release period, TMCRA accounts are free to use with no memory
 ## Install the preview tarball
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.2/dsh-tmcra-memory-0.1.2.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.3/dsh-tmcra-memory-0.1.3.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
@@ -69,9 +69,9 @@ dsh web
 
 Harness serves its Web UI at `http://127.0.0.1:3080` by default.
 
-The package contributes `cordis.patch.yml`, so the install command activates the plugin in the selected profile. Prefer the prebuilt release tarball. A locally downloaded copy can also be installed with `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.2.tgz`. Installing from a Git source may require an explicit `pnpm` build-script allowance.
+The package contributes `cordis.patch.yml`, so the install command activates the plugin in the selected profile. Prefer the prebuilt release tarball. A locally downloaded copy can also be installed with `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.3.tgz`. Installing from a Git source may require an explicit `pnpm` build-script allowance.
 
-DSH `0.1.1-rc.2` on Windows can still re-anchor a local package path incorrectly when the path contains spaces or non-ASCII characters. Copy the tarball to a short ASCII path first, such as `D:\\dsh-packages\\dsh-tmcra-memory-0.1.2.tgz`. The release URL above is not affected.
+DSH `0.1.1-rc.2` on Windows can still re-anchor a local package path incorrectly when the path contains spaces or non-ASCII characters. Copy the tarball to a short ASCII path first, such as `D:\\dsh-packages\\dsh-tmcra-memory-0.1.3.tgz`. The release URL above is not affected.
 
 ## Connect your TMCRA account
 

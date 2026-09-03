@@ -1,5 +1,12 @@
 # Changelog
 
+## 0.1.3 - 2026-09-04
+
+- Fix the real DSH package compatibility probe on Windows, where `npm pack` returns an absolute path and the probe previously joined that path twice.
+- Run the full DSH package-install, profile-composition, Web-readiness, type, unit, packaging, and audit contracts on both Ubuntu and Windows.
+- Add a tag-driven release workflow that publishes the tested tarball and SHA-256 checksum.
+- Keep compatibility pinned to the current stable `@deepseek-ai/dsh` `0.1.1-rc.2` release.
+
 ## 0.1.2 - 2026-08-25
 
 - Update the complete DeepSeek Harness development and runtime contract set from `0.1.0-rc.6` to `0.1.1-rc.2`.

@@ -61,7 +61,7 @@ Agent 回答前，TMCRA 会找回与当前问题有关的用户要求、决策�
 ## 安装技术预览包
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.2/dsh-tmcra-memory-0.1.2.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.3/dsh-tmcra-memory-0.1.3.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
@@ -69,9 +69,9 @@ dsh web
 
 Harness Web UI 默认地址为 `http://127.0.0.1:3080`。
 
-压缩包内含 `cordis.patch.yml`，安装后会自动加入指定 Profile 的配置层。建议使用 Release 中已经构建好的 `.tgz`。下载到本地后，也可以执行 `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.2.tgz`。从 Git 源码安装可能还需要在 `pnpm` 中单独允许构建脚本。
+压缩包内含 `cordis.patch.yml`，安装后会自动加入指定 Profile 的配置层。建议使用 Release 中已经构建好的 `.tgz`。下载到本地后，也可以执行 `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.3.tgz`。从 Git 源码安装可能还需要在 `pnpm` 中单独允许构建脚本。
 
-DSH `0.1.1-rc.2` 的 Windows 版仍可能把包含空格或非 ASCII 字符的本地包路径错误重组。请先把压缩包复制到纯 ASCII 短路径，例如 `D:\\dsh-packages\\dsh-tmcra-memory-0.1.2.tgz`；上面的 Release URL 不受影响。
+DSH `0.1.1-rc.2` 的 Windows 版仍可能把包含空格或非 ASCII 字符的本地包路径错误重组。请先把压缩包复制到纯 ASCII 短路径，例如 `D:\\dsh-packages\\dsh-tmcra-memory-0.1.3.tgz`；上面的 Release URL 不受影响。
 
 ## 连接 TMCRA 账号
 

@@ -9,12 +9,16 @@ permissions:
 
 jobs:
   verify:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
       - uses: pnpm/action-setup@v4
         with:
-          version: 11.19.0
+          version: 11.22.0
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -27,4 +31,4 @@ jobs:
       - run: npm run build
       - run: npm run test:dsh-compat
       - run: npm run pack:check
-      - run: pnpm audit --prod
+      - run: pnpm audit --prod --registry=https://registry.npmjs.org

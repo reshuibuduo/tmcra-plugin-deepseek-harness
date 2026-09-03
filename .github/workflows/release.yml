@@ -1,0 +1,45 @@
+name: Publish release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.22.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile --config.minimum-release-age=0
+      - name: Match tag and package version
+        run: |
+          version=$(node -p 'require("./package.json").version')
+          test "v$version" = "$GITHUB_REF_NAME"
+      - run: pnpm run typecheck
+      - run: pnpm test
+      - run: pnpm run test:dsh-compat
+      - name: Build release package
+        run: |
+          mkdir release
+          npm pack --pack-destination release --silent
+          cd release
+          sha256sum dsh-tmcra-memory-*.tgz > SHA256SUMS
+      - name: Publish immutable assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            release/dsh-tmcra-memory-*.tgz \
+            release/SHA256SUMS \
+            --verify-tag \
+            --generate-notes

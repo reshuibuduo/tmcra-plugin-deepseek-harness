@@ -94,13 +94,14 @@ try {
     .filter(Boolean)
     .at(-1);
   if (!archiveName) throw new Error("npm pack did not return an archive name.");
-  const archivePath = join(packageDir, archiveName);
-  if (/[^\x20-\x7E]|\s/.test(archivePath)) {
-    throw new Error(`DSH rc.2 cannot safely install a local archive from this path: ${archivePath}`);
-  }
+  // npm prints only the archive name on Unix and an absolute path on Windows.
+  // resolve handles both forms; path.join would duplicate the Windows drive
+  // path under packageDir and produce an invalid pnpm spec.
+  const archivePath = resolve(packageDir, archiveName);
+  const archiveSpec = archivePath;
 
   const env = { ...process.env, DSH_HOME: dshHome };
-  run(process.execPath, [dshEntry, "plugin", "--profile", "web", "add", archivePath], { env });
+  run(process.execPath, [dshEntry, "plugin", "--profile", "web", "add", archiveSpec], { env });
   const dump = run(process.execPath, [dshEntry, "--profile", "web", "--dump-config"], { env });
   if (!/^\s*- id: tmcra-memory\s*$/m.test(dump) || !/^\s*name: dsh-tmcra-memory\s*$/m.test(dump)) {
     throw new Error("The composed DSH profile does not contain the TMCRA plugin entry.");
