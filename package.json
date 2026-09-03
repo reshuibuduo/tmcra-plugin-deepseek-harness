@@ -1,6 +1,6 @@
 {
   "name": "dsh-tmcra-memory",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Automatic TMCRA recall, injection, and role-separated writeback for DeepSeek Harness",
   "type": "module",
   "main": "dist/index.mjs",

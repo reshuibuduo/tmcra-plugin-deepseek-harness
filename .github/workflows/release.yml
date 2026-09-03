@@ -32,6 +32,7 @@ jobs:
         run: |
           mkdir release
           npm pack --pack-destination release --silent
+          node scripts/canonicalize-tarball.mjs release/dsh-tmcra-memory-*.tgz
           cd release
           sha256sum dsh-tmcra-memory-*.tgz > SHA256SUMS
       - name: Publish immutable assets

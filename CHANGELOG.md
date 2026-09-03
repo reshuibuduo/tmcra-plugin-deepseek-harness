@@ -1,9 +1,13 @@
 # Changelog
 
+## 0.1.5 - 2026-09-04
+
+- Canonicalize the executable mode and use a deterministic stored-DEFLATE gzip stream for byte-for-byte identical release tarballs on Windows and Linux.
+
 ## 0.1.4 - 2026-09-04
 
 - Normalize packaged text to UTF-8/LF and strip build-machine prefixes from generated region comments.
-- Make the npm tarball byte-for-byte reproducible across Windows and Linux release runners.
+- Keep package payload contents identical across Windows and Linux release runners.
 
 ## 0.1.3 - 2026-09-04
 

@@ -99,6 +99,7 @@ try {
   // path under packageDir and produce an invalid pnpm spec.
   const archivePath = resolve(packageDir, archiveName);
   const archiveSpec = archivePath;
+  run(process.execPath, [join(root, "scripts", "canonicalize-tarball.mjs"), archivePath]);
 
   const env = { ...process.env, DSH_HOME: dshHome };
   run(process.execPath, [dshEntry, "plugin", "--profile", "web", "add", archiveSpec], { env });
