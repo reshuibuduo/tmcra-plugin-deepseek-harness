@@ -33,5 +33,6 @@ jobs:
       - run: npm run pack:check
       - name: Audit production dependencies
         run: >-
-          pnpm audit --prod --ignore-registry-errors
+          pnpm --config.fetch-retries=0 --config.fetch-timeout=30000
+          audit --prod --ignore-registry-errors
           --registry=https://registry.npmjs.org
