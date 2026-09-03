@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.1.4 - 2026-09-04
+
+- Normalize packaged text to UTF-8/LF and strip build-machine prefixes from generated region comments.
+- Make the npm tarball byte-for-byte reproducible across Windows and Linux release runners.
+
 ## 0.1.3 - 2026-09-04
 
 - Fix the real DSH package compatibility probe on Windows, where `npm pack` returns an absolute path and the probe previously joined that path twice.
