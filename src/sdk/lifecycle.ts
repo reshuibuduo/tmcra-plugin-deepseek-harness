@@ -23,6 +23,8 @@ import {
   makeSubmittedIngestReceipt,
 } from "./receipts.ts";
 import type { PendingTurnQueue, PendingTurnRecord } from "./queue.ts";
+import { memoryPolicy, mayWrite, legacyWriteAllowed, beginMemoryTurn, taskContext, memoryDashboard, budgetEvidence, recordMemoryActivity, finishObservedTurn } from "../../scripts/memory_controls.mjs";
+import type { MemoryCapture } from "../../scripts/memory_controls.mjs";
 
 const DEFAULT_SOURCE = "typescript-sdk-automatic-lifecycle";
 const MEMORY_CONTEXT_OPEN = "<tmcra-memory-context>";
@@ -45,12 +47,14 @@ export interface TurnIdentityOptions {
 }
 
 export interface LifecycleTurnOptions extends TurnIdentityOptions {
+  visibleContext?: string;
   sessionId?: string;
   strictRecall?: boolean;
   strictIngest?: boolean;
 }
 
 export interface AutomaticLifecycleConfig {
+  memoryControlKey?: string;
   /** Required shared team/project boundary. All automatic turn writes go only to this scope. */
   projectScope: string;
   /** Optional user-level scope recalled before the project scope. It is never written automatically. */
@@ -77,6 +81,7 @@ export interface AutomaticLifecycleConfig {
 }
 
 interface ResolvedLifecycleConfig {
+  memoryControlKey?: string;
   projectScope: string;
   globalScope?: string;
   agentPrivateScope?: string;
@@ -103,6 +108,7 @@ export interface LifecycleModelMessage {
 }
 
 export class PreparedTurn {
+  readonly capture?: MemoryCapture;
   readonly userContent: string;
   readonly sessionId: string;
   readonly turnId?: string;
@@ -114,6 +120,7 @@ export class PreparedTurn {
   readonly createdAt: string;
 
   constructor(options: {
+    capture?: MemoryCapture;
     userContent: string;
     sessionId: string;
     turnId?: string;
@@ -124,6 +131,7 @@ export class PreparedTurn {
     recallReceipts?: readonly RecallReceipt[];
     createdAt?: string;
   }) {
+    this.capture = options.capture;
     this.userContent = options.userContent;
     this.sessionId = options.sessionId;
     this.turnId = options.turnId;
@@ -321,6 +329,7 @@ function resolveConfig(config: AutomaticLifecycleConfig): ResolvedLifecycleConfi
     waitForJob: { ...(config.waitForJob ?? {}) },
     pendingQueue: config.pendingQueue,
     source: requiredText(config.source ?? DEFAULT_SOURCE, "source"),
+    memoryControlKey: config.memoryControlKey,
   };
 }
 
@@ -344,6 +353,9 @@ export class TMCRAMemoryLifecycle {
     const normalizedUserContent = requiredText(userContent, "userContent");
     const sessionId = options.sessionId === undefined ? generatedId("tmcra-session") : requiredText(options.sessionId, "sessionId");
     const turnId = options.turnId === undefined ? undefined : requiredText(options.turnId, "turnId");
+    const capture = this.config.memoryControlKey ? await beginMemoryTurn(this.config.memoryControlKey, sessionId, turnId || generatedId("capture")) : undefined;
+    if (capture && !capture.read) return new PreparedTurn({ userContent: normalizedUserContent, sessionId, turnId, capture, systemContext: "", recalledScopes: [] });
+    const continuation = capture ? await taskContext(capture.key, sessionId, normalizedUserContent, { capture }) : undefined;
     const turnIdempotencyKey = options.turnIdempotencyKey === undefined
       ? await deriveTurnIdempotencyKey({ projectScope: this.config.projectScope, sessionId, userContent: normalizedUserContent, turnId })
       : validIdempotencyKey(options.turnIdempotencyKey);
@@ -365,8 +377,9 @@ export class TMCRAMemoryLifecycle {
     const outcomes = await Promise.all(targets.map(async (target): Promise<RecallOutcome> => {
       try {
         const response = await this.client.recall(target.scopeName, {
-          query: normalizedUserContent,
-          evidence_mode: this.config.evidenceMode,
+          query: continuation?.query || normalizedUserContent,
+          evidence_mode: capture ? "raw" : this.config.evidenceMode,
+          recall_profile: "interactive",
           max_windows: 8,
         });
         return { target, response, receipt: await makeRecallReceipt(response) };
@@ -382,13 +395,29 @@ export class TMCRAMemoryLifecycle {
     });
     const errors = outcomes.flatMap((outcome) => outcome.error === undefined ? [] : [recallFailure(outcome.target.scopeName, outcome.error)]);
     const receipts = outcomes.flatMap((outcome) => outcome.receipt ? [outcome.receipt] : []);
+    let systemContext = renderContext(sections);
+    if (capture) {
+      const dashboard = await memoryDashboard(capture.key, sessionId);
+      const layers = outcomes.map((outcome) => ({ scope: outcome.target.scopeName,
+        content: outcome.response ? promptEvidenceContent(outcome.response) : "",
+        status: outcome.error ? "failed" : "success", queryId: outcome.response?.query_id,
+        sources: (outcome.response?.prompt_evidence as Record<string, unknown> | undefined)?.sources || [],
+      }));
+      const selection = budgetEvidence(layers, { budgetChars: dashboard.budgetChars, visibleText: options.visibleContext || "" });
+      const parts = [{ label: "Selected memory evidence", content: selection.content }];
+      if (continuation?.task) parts.unshift({ label: "Task handoff; historical work, verify before acting", content: continuation.query });
+      if (continuation && continuation.candidates.length > 1) parts.unshift({ label: "Multiple active tasks; ask which one to continue", content: JSON.stringify(continuation.candidates) });
+      systemContext = renderContext(parts.filter((part) => part.content));
+      await recordMemoryActivity(capture, { kind: "recall", query: continuation?.query || normalizedUserContent, layers, selection });
+    }
     if ((options.strictRecall ?? this.config.strictRecall) && errors.length > 0) throw new Error(`strict recall failed for ${errors.map((error) => error.scopeName).join(", ")}`);
     return new PreparedTurn({
       userContent: normalizedUserContent,
       sessionId,
       turnId,
       turnIdempotencyKey,
-      systemContext: renderContext(sections),
+      systemContext,
+      capture,
       recalledScopes: targets.map((target) => target.scopeName),
       recallErrors: errors,
       recallReceipts: receipts,
@@ -406,6 +435,7 @@ export class TMCRAMemoryLifecycle {
     ingestReceipt: IngestReceipt;
   }> {
     const normalizedAssistantContent = requiredText(assistantContent, "assistantContent");
+    if (prepared.capture && !await mayWrite(prepared.capture)) throw new Error("TMCRA write skipped: session memory mode changed");
     const turnIdempotencyKey = options.turnIdempotencyKey === undefined
       ? prepared.turnIdempotencyKey
       : validIdempotencyKey(options.turnIdempotencyKey);
@@ -428,6 +458,7 @@ export class TMCRAMemoryLifecycle {
     };
     const messageIds = body.messages.map((message) => message.message_id);
     const pendingRecord: PendingTurnRecord = {
+      capture: prepared.capture,
       version: 1,
       idempotencyKey: turnIdempotencyKey,
       scopeName: this.config.projectScope,
@@ -440,12 +471,20 @@ export class TMCRAMemoryLifecycle {
     if (this.config.pendingQueue) await this.config.pendingQueue.enqueue(pendingRecord);
     let submitted: JobView;
     try {
+      if (prepared.capture && !await mayWrite(prepared.capture)) {
+        await this.config.pendingQueue?.remove(turnIdempotencyKey);
+        throw new Error("TMCRA write skipped: session memory mode changed");
+      }
       submitted = await this.client.ingest(this.config.projectScope, body, { idempotencyKey: turnIdempotencyKey });
     } catch (error) {
       if (this.config.pendingQueue) await this.config.pendingQueue.update(turnIdempotencyKey, { lastError: error instanceof Error ? error.message : String(error) });
       throw error;
     }
     const initialReceipt = makeSubmittedIngestReceipt(this.config.projectScope, messageIds, submitted);
+    if (prepared.capture) {
+      await finishObservedTurn(prepared.capture, prepared.userContent, normalizedAssistantContent);
+      await recordMemoryActivity(prepared.capture, { kind: "write", state: submitted.status, jobId: submitted.job_id });
+    }
     if (this.config.pendingQueue) await this.config.pendingQueue.update(turnIdempotencyKey, {
       jobId: submitted.job_id,
       statusUrl: submitted.status_url,
@@ -516,6 +555,17 @@ export class TMCRAMemoryLifecycle {
     const results: PendingTurnReconciliationResult[] = [];
     for (const record of records) {
       try {
+        if (!record.jobId && record.capture && !await mayWrite(record.capture)) {
+          await this.config.pendingQueue.remove(record.idempotencyKey);
+          results.push({ key: record.idempotencyKey, status: "discarded", final: true });
+          continue;
+        }
+        if (!record.jobId && !record.capture && this.config.memoryControlKey
+          && !await legacyWriteAllowed(this.config.memoryControlKey, { sessionId: record.sessionId })) {
+          await this.config.pendingQueue.remove(record.idempotencyKey);
+          results.push({ key: record.idempotencyKey, status: "discarded", final: true });
+          continue;
+        }
         let job: JobView;
         if (record.jobId && this.client.getJob) {
           job = await this.client.getJob(record.jobId);
@@ -530,6 +580,7 @@ export class TMCRAMemoryLifecycle {
           job = await this.client.waitForJob(job.job_id, { ...(options.waitForJob ?? this.config.waitForJob), throwOnFailure: false });
         }
         const final = ["succeeded", "failed", "cancelled"].includes(job.status);
+        if (record.capture) await recordMemoryActivity(record.capture, { kind: "write", jobId: job.job_id, state: job.status });
         if (job.status === "succeeded") await this.config.pendingQueue.remove(record.idempotencyKey);
         else await this.config.pendingQueue.update(record.idempotencyKey, { observedStatus: job.status, lastError: JSON.stringify(job.error) });
         results.push(Object.freeze({ key: record.idempotencyKey, jobId: job.job_id, status: job.status, final }));

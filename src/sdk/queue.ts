@@ -1,6 +1,8 @@
 import type { IngestRequest, JobStatus } from "./models.ts";
+import type { MemoryCapture } from "../../scripts/memory_controls.mjs";
 
 export interface PendingTurnRecord {
+  readonly capture?: MemoryCapture;
   readonly version: 1;
   readonly idempotencyKey: string;
   readonly scopeName: string;

@@ -1,10 +1,12 @@
 #!/usr/bin/env node
+import { a as createMemoryActions, i as FilePendingTurnQueue, n as readLocalProviderConfig, o as startMemoryCenter, t as localProviderStageReady } from "./local-provider-config-CDBjMheh.mjs";
+import { n as readFullLocalConfig } from "./full-local-config-BiZAIc60.mjs";
 import { createHash, randomBytes } from "node:crypto";
-import { existsSync } from "node:fs";
+import { chmod, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { homedir, platform } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { chmod, mkdir, readFile, rm, stat } from "node:fs/promises";
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { withFileLock, writeFileAtomic } from "@deepseek-ai/dsh-atomic-write";
 import { Document, isMap, parseDocument } from "yaml";
@@ -58,7 +60,7 @@ async function postJson(fetchImpl, url, body) {
 			headers: {
 				Accept: "application/json",
 				"Content-Type": "application/json",
-				"User-Agent": "dsh-tmcra-memory/0.1.7"
+				"User-Agent": "dsh-tmcra-memory/1.0.0-rc.1"
 			},
 			body: JSON.stringify(body),
 			signal: controller.signal
@@ -175,6 +177,15 @@ async function updateHarnessCredentials(updates, dshHome) {
 	return path;
 }
 async function readHarnessCredentialStatus(dshHome) {
+	const local = await readFullLocalConfig();
+	if (local) return {
+		configured: true,
+		credentialsPath: "private-local-installation",
+		apiBaseUrl: local.baseUrl,
+		globalScope: local.globalScope,
+		projectScopePrefix: local.projectScopePrefix,
+		deploymentMode: "local"
+	};
 	const path = credentialsPath(dshHome);
 	if (!existsSync(path)) return {
 		configured: false,
@@ -188,6 +199,24 @@ async function readHarnessCredentialStatus(dshHome) {
 		apiBaseUrl: value[CREDENTIAL_KEYS.apiBaseUrl] || null,
 		globalScope: value[CREDENTIAL_KEYS.globalScope] || null,
 		projectScopePrefix: value[CREDENTIAL_KEYS.projectScopePrefix] || null
+	};
+}
+/** Local control-panel transport only. Never print this object or send it to a model. */
+async function readHarnessMemoryConnection(dshHome) {
+	const local = await readFullLocalConfig();
+	if (local) return local;
+	const path = credentialsPath(dshHome);
+	await assertOwnerOnly(path);
+	const values = existsSync(path) ? credentialsDocument(await readFile(path, "utf8")).toJS() : {};
+	const apiKey = process.env.TMCRA_API_KEY || values[CREDENTIAL_KEYS.apiKey];
+	const baseUrl = process.env.TMCRA_API_BASE_URL || values[CREDENTIAL_KEYS.apiBaseUrl] || "https://api.tmcra.com";
+	const url = new URL(baseUrl);
+	if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("TMCRA memory API must be an HTTPS origin");
+	if (!apiKey) throw new Error("Sign in with dsh-tmcra-memory login first");
+	return {
+		apiKey,
+		baseUrl,
+		globalScope: process.env.TMCRA_GLOBAL_SCOPE || values[CREDENTIAL_KEYS.globalScope]
 	};
 }
 async function atomicPending(path, value) {
@@ -277,7 +306,7 @@ async function authorizeDeepSeekHarness(options = {}) {
 	const started = await postJson(fetchImpl, `${authBaseUrl}/api/device/v1/authorizations`, {
 		clientId: CLIENT_ID,
 		clientName: `DeepSeek Harness (${platform()} ${process.arch})`,
-		clientVersion: "0.1.7",
+		clientVersion: "1.0.0-rc.1",
 		codeChallenge: challenge,
 		codeChallengeMethod: "S256"
 	});
@@ -383,9 +412,9 @@ function option(name) {
 function printJson(value) {
 	process.stdout.write(`${JSON.stringify(value)}\n`);
 }
-async function runProviderSetup() {
+async function runProviderSetup(filename = "provider_setup.mjs") {
 	const cliDirectory = dirname(fileURLToPath(import.meta.url));
-	const script = resolve(cliDirectory, "..", "scripts", "provider_setup.mjs");
+	const script = resolve(cliDirectory, "..", "scripts", filename);
 	const forwarded = process.argv.slice(3);
 	await new Promise((resolvePromise, reject) => {
 		const child = spawn(process.execPath, [script, ...forwarded], {
@@ -403,6 +432,60 @@ async function main() {
 	const command = process.argv[2] || "help";
 	const json = process.argv.includes("--json");
 	const dshHome = option("--dsh-home");
+	if (command === "local-install") {
+		await runProviderSetup("local_setup.mjs");
+		return;
+	}
+	if (command === "memory") {
+		const connection = await readHarnessMemoryConnection(dshHome);
+		const scope = option("--scope");
+		const sessionId = option("--session");
+		if (!scope || !sessionId) throw new Error("Use memory --scope EXACT_PROJECT_SCOPE --session EXACT_SESSION_ID");
+		const queue = new FilePendingTurnQueue(join(resolveDshHome(dshHome), "tmcra", "deepseek-harness-pending-turns.json"));
+		const invoke = createMemoryActions({
+			config: connection,
+			scope,
+			sessionId,
+			globalScope: connection.globalScope,
+			status: async () => ({ pending: (await queue.list()).filter((row) => row.scopeName === scope).map((row) => ({
+				id: row.idempotencyKey,
+				jobId: row.jobId,
+				state: row.observedStatus || "queued"
+			})) }),
+			request: async (path, options) => {
+				const provider = await readLocalProviderConfig().catch(() => null);
+				const localHeaders = {};
+				if (provider && localProviderStageReady(provider, "writer")) localHeaders["X-TMCRA-Writer-Execution"] = "user-provider";
+				if (provider && localProviderStageReady(provider, "organizer")) localHeaders["X-TMCRA-Organizer-Execution"] = "user-provider";
+				const response = await fetch(`${connection.baseUrl.replace(/\/+$/u, "")}${path}`, {
+					method: options.method,
+					headers: {
+						Authorization: `Bearer ${connection.apiKey}`,
+						"Content-Type": "application/json",
+						"X-TMCRA-Client-Platform": "deepseek_harness",
+						"X-TMCRA-Integration-ID": "tmcra-deepseek-harness",
+						...localHeaders,
+						...options.headers
+					},
+					body: JSON.stringify(options.body),
+					signal: AbortSignal.timeout(3e4),
+					redirect: "error"
+				});
+				if (!response.ok) throw new Error(`TMCRA request failed (${response.status}); check authorization and service version`);
+				return response.json();
+			}
+		});
+		const center = await startMemoryCenter({
+			invoke,
+			open: !process.argv.includes("--no-open")
+		});
+		printJson({
+			url: center.url,
+			credentialsLocalOnly: true
+		});
+		await new Promise((done) => center.server.once("close", done));
+		return;
+	}
 	if (command === "setup" || command === "configure-models") {
 		await runProviderSetup();
 		return;
@@ -447,7 +530,7 @@ async function main() {
 		else process.stdout.write(`TMCRA credentials were removed from ${path}. Revoke the connection in your TMCRA account if this device is no longer trusted.\n`);
 		return;
 	}
-	process.stdout.write(`Usage:\n  dsh-tmcra-memory setup [--no-open] [--config-file PATH] [--json]\n  dsh-tmcra-memory login [--no-open] [--auth-base-url URL] [--dsh-home PATH] [--json]\n  dsh-tmcra-memory status [--dsh-home PATH] [--json]\n  dsh-tmcra-memory logout [--dsh-home PATH] [--json]\n`);
+	process.stdout.write(`Usage:\n  dsh-tmcra-memory local-install [--no-open]\n  dsh-tmcra-memory setup [--no-open] [--config-file PATH] [--json]\n  dsh-tmcra-memory memory --scope EXACT_PROJECT_SCOPE --session EXACT_SESSION_ID [--no-open] [--dsh-home PATH]\n  dsh-tmcra-memory login [--no-open] [--auth-base-url URL] [--dsh-home PATH] [--json]\n  dsh-tmcra-memory status [--dsh-home PATH] [--json]\n  dsh-tmcra-memory logout [--dsh-home PATH] [--json]\n`);
 }
 const invokedPath = process.argv[1] ? pathToFileURL(process.argv[1]).href : "";
 if (import.meta.url === invokedPath) await main().catch((error) => {

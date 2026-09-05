@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.0.0-rc.1 - 2026-09-06
+
+- Add the redesigned local memory workspace, provider configuration, knowledge/graph views, task continuity, session modes, and recall budgets.
+- Support confirmed targeted feedback and prevent disabled or correction-discussion turns from later queue replay.
+- Add three pinned embedding/reranker profiles and Windows runtime preview controls; explicit local identity bypasses cloud login and disables cloud model task execution.
+- Ship the verified backend with automatic private Python setup and local identity discovery. `local-install` opens setup without a TMCRA account or server; stale cloud requests are blocked after local selection.
+- Ship all generated runtime chunks and workspace assets. Full-local compiler, organizer, and restart acceptance remains incomplete.
+
 ## 0.1.7 - 2026-09-04
 
 - Activate the configured Writer and background-organizer providers through the authenticated TMCRA user-provider task protocol.

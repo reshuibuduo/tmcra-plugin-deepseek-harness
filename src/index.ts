@@ -12,6 +12,11 @@
  */
 
 import { createHash } from "node:crypto";
+import { controlKey, mayWrite } from "../scripts/memory_controls.mjs";
+import { createMemoryActions } from "../scripts/memory_center.mjs";
+import { memoryFetch } from "./full-local-config.js";
+import type {} from "@deepseek-ai/dsh-tools";
+import type {} from "@deepseek-ai/dsh-user-approval";
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -392,6 +397,8 @@ async function resolveCredential(ctx: Context, reference: string): Promise<strin
 }
 
 async function resolveConnectionConfig(ctx: Context, config: Config): Promise<ResolvedConnectionConfig> {
+  const local = await import("./full-local-config.js").then(module => module.readFullLocalConfig());
+  if (local) return local;
   const baseUrlReference = cleanText(config.baseUrlEnv, "baseUrlEnv") ?? DEFAULT_BASE_URL_ENV;
   const baseUrl = await resolveCredential(ctx, baseUrlReference)
     ?? cleanText(config.baseUrl, "baseUrl")
@@ -403,6 +410,8 @@ async function resolveConnectionConfig(ctx: Context, config: Config): Promise<Re
 }
 
 async function resolveOperationConfig(ctx: Context, config: Config): Promise<ResolvedOperationConfig> {
+  const local = await import("./full-local-config.js").then(module => module.readFullLocalConfig());
+  if (local) return { ...local, localProviderExecution: { writer: false, organizer: false } };
   const connection = await resolveConnectionConfig(ctx, config);
   const globalReference = cleanText(config.globalScopeEnv, "globalScopeEnv") ?? DEFAULT_GLOBAL_SCOPE_ENV;
   const globalScope = cleanText(config.globalScope, "globalScope") ?? await resolveCredential(ctx, globalReference);
@@ -451,6 +460,7 @@ function lifecycleFor(
   const client = new TMCRAClient({
     baseUrl: operation.baseUrl,
     apiKey: operation.apiKey,
+    fetch: memoryFetch(operation),
     defaultTimeoutMs: stage === "recall"
       ? validatePositiveTimeout(config.recallTimeoutMs, 30_000, "recallTimeoutMs")
       : validatePositiveTimeout(config.ingestTimeoutMs, 30_000, "ingestTimeoutMs"),
@@ -460,6 +470,7 @@ function lifecycleFor(
     localProviderExecution: operation.localProviderExecution,
   });
   return new TMCRAMemoryLifecycle(client, {
+    memoryControlKey: controlKey(operation, projectScope),
     projectScope,
     globalScope: operation.globalScope,
     evidenceMode: config.evidenceMode ?? "auto",
@@ -492,6 +503,52 @@ function reportLocalProviderEvent(ctx: Context, event: LocalProviderExecutorEven
 
 /** Register automatic TMCRA memory at native Harness lifecycle seams. */
 export function apply(ctx: Context, config: Config): void {
+  // Native tool registration is optional; automatic lifecycle still works in minimal hosts.
+  ctx.inject(["tools"], (toolCtx) => {
+    toolCtx.effect(() => toolCtx.tools.register({
+      name: "tmcra_memory_control",
+      description: "Inspect TMCRA memory or correct a remembered fact. When the user says you remembered something wrong, FIRST use correction_start to suspend this turn's automatic capture, then clarify exact sources and replacement if needed. feedback always asks the user inside the host chat before committing. Hypotheticals and quoted source text are not correction requests. Never work around a declined/unavailable confirmation with ingest or another tool.",
+      parameters: { type: "object", additionalProperties: false, required: ["operation"], properties: {
+        operation: { type: "string", enum: ["dashboard", "correction_start", "feedback"] },
+        scope: { type: "string" }, action: { type: "string", enum: ["correct", "ignore", "restore"] },
+        memory_ids: { type: "array", items: { type: "string" }, minItems: 1, maxItems: 100 },
+        replacement: { type: "string", maxLength: 4000 }, query_id: { type: "string" },
+        idempotency_key: { type: "string", minLength: 8, maxLength: 200 },
+      } },
+      output: { schema: { type: "object", additionalProperties: true }, render: (_args, value) => [{ type: "text", text: JSON.stringify(value) }] },
+      async execute(input, exec) {
+        if (!exec.agent) throw new Error("An active host conversation is required");
+        const args = input as Record<string, unknown>;
+        if (!["dashboard", "correction_start", "feedback"].includes(String(args.operation))) throw new Error("Unknown memory operation");
+        const connection = await resolveOperationConfig(ctx, config);
+        const scope = cleanText(config.projectScope, "projectScope") ? validateScope(config.projectScope!, "projectScope")
+          : deriveProjectScope(connection.projectScopePrefix, exec.agent, config.projectId);
+        const invoke = createMemoryActions({ config: connection, scope, globalScope: connection.globalScope,
+          sessionId: String(exec.agent.session.header.id),
+          confirmFeedback: async (reason) => {
+            const approval = toolCtx.get("approval");
+            if (!approval) return "confirmation_unavailable";
+            const outcome = await approval.request({ agent: exec.agent!, toolName: exec.name, callId: exec.callId,
+              reason, signal: AbortSignal.any([exec.signal, AbortSignal.timeout(120000)]) });
+            return outcome === "allowed-once" ? "accepted" : outcome;
+          },
+          request: async (path, options) => {
+            const provider = await readLocalProviderConfig().catch(() => null);
+            const headers: Record<string, string> = {};
+            for (const stage of ["writer", "organizer"] as const) if (provider && localProviderStageReady(provider, stage))
+              headers[stage === "writer" ? "X-TMCRA-Writer-Execution" : "X-TMCRA-Organizer-Execution"] = "user-provider";
+            const response = await fetch(`${connection.baseUrl.replace(/\/+$/u, "")}${path}`, { method: options.method,
+              headers: { Authorization: `Bearer ${connection.apiKey}`, "Content-Type": "application/json", ...headers, ...options.headers },
+              body: options.body === undefined ? undefined : JSON.stringify(options.body),
+              signal: AbortSignal.any([exec.signal, AbortSignal.timeout(30000)]), redirect: "error" });
+            if (!response.ok) throw new Error(`TMCRA request failed (${response.status})`);
+            return response.json();
+          },
+        });
+        return await invoke(String(args.operation), args);
+      },
+    }));
+  });
   validatePositiveTimeout(config.recallTimeoutMs, 30_000, "recallTimeoutMs");
   validatePositiveTimeout(config.ingestTimeoutMs, 30_000, "ingestTimeoutMs");
   const preparedByAgentTurn = new Map<string, PreparedHarnessTurn>();
@@ -521,6 +578,7 @@ export function apply(ctx: Context, config: Config): void {
         return new TMCRAClient({
           baseUrl: connection.baseUrl,
           apiKey: connection.apiKey,
+          fetch: memoryFetch(connection),
           defaultTimeoutMs: validatePositiveTimeout(config.ingestTimeoutMs, 30_000, "ingestTimeoutMs"),
           clientPlatform: "deepseek_harness",
           integrationId: "tmcra-deepseek-harness",
@@ -560,7 +618,7 @@ export function apply(ctx: Context, config: Config): void {
       },
     });
     for (const result of results) {
-      if (result.status === "succeeded") continue;
+      if (result.status === "succeeded" || result.status === "discarded") continue;
       warn(ctx, "ingest", new Error(
         `pending turn ${result.key} remains ${result.status}${result.error ? `: ${result.error}` : ""}`,
       ));
@@ -588,6 +646,7 @@ export function apply(ctx: Context, config: Config): void {
       const prepared = await lifecycle.prepareTurn(prompt, {
         sessionId: String(agent.session.header.id),
         turnId: String(turn),
+        visibleContext: downstream.messages.map((message) => blocksToText(message.content)).join("\n"),
       });
       preparedByAgentTurn.set(key, {
         prepared,
@@ -623,6 +682,7 @@ export function apply(ctx: Context, config: Config): void {
     const writeback = previous.catch(() => undefined).then(async () => {
       try {
         const operation = await resolveOperationConfig(ctx, config);
+        if (state.prepared.capture && !await mayWrite(state.prepared.capture)) return;
         const lifecycle = lifecycleFor(
           config,
           operation,

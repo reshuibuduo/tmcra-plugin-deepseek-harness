@@ -43,4 +43,5 @@ jobs:
             release/dsh-tmcra-memory-*.tgz \
             release/SHA256SUMS \
             --verify-tag \
-            --generate-notes
+            --generate-notes \
+            --prerelease
