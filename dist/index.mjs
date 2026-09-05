@@ -1,11 +1,12 @@
+import { a as createMemoryActions, c as budgetEvidence, d as legacyWriteAllowed, f as mayWrite, h as taskContext, i as FilePendingTurnQueue, l as controlKey, m as recordMemoryActivity, n as readLocalProviderConfig, p as memoryDashboard, r as resolvedLocalProviderStage, s as beginMemoryTurn, t as localProviderStageReady, u as finishObservedTurn } from "./local-provider-config-CDBjMheh.mjs";
+import { i as assertCloudProvidersAllowed, t as memoryFetch } from "./full-local-config-BiZAIc60.mjs";
 import { createHash } from "node:crypto";
-import { existsSync, readFileSync, statSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { existsSync, readFileSync, statSync } from "node:fs";
 import z from "@deepseek-ai/schemastery";
 import { credentialRef } from "@deepseek-ai/dsh-credentials";
 import { createUserMessage } from "@deepseek-ai/dsh-llm";
-import { readFile } from "node:fs/promises";
 //#region src/sdk/errors.ts
 var TMCRAError = class extends Error {
 	requestId;
@@ -1009,6 +1010,7 @@ const MEMORY_CONTEXT_OPEN = "<tmcra-memory-context>";
 const MEMORY_CONTEXT_CLOSE = "</tmcra-memory-context>";
 let generatedIdCounter = 0;
 var PreparedTurn = class {
+	capture;
 	userContent;
 	sessionId;
 	turnId;
@@ -1019,6 +1021,7 @@ var PreparedTurn = class {
 	recallReceipts;
 	createdAt;
 	constructor(options) {
+		this.capture = options.capture;
 		this.userContent = options.userContent;
 		this.sessionId = options.sessionId;
 		this.turnId = options.turnId;
@@ -1158,7 +1161,8 @@ function resolveConfig(config) {
 		strictIngest,
 		waitForJob: { ...config.waitForJob ?? {} },
 		pendingQueue: config.pendingQueue,
-		source: requiredText(config.source ?? DEFAULT_SOURCE, "source")
+		source: requiredText(config.source ?? DEFAULT_SOURCE, "source"),
+		memoryControlKey: config.memoryControlKey
 	};
 }
 /**
@@ -1176,6 +1180,16 @@ var TMCRAMemoryLifecycle = class {
 		const normalizedUserContent = requiredText(userContent, "userContent");
 		const sessionId = options.sessionId === void 0 ? generatedId("tmcra-session") : requiredText(options.sessionId, "sessionId");
 		const turnId = options.turnId === void 0 ? void 0 : requiredText(options.turnId, "turnId");
+		const capture = this.config.memoryControlKey ? await beginMemoryTurn(this.config.memoryControlKey, sessionId, turnId || generatedId("capture")) : void 0;
+		if (capture && !capture.read) return new PreparedTurn({
+			userContent: normalizedUserContent,
+			sessionId,
+			turnId,
+			capture,
+			systemContext: "",
+			recalledScopes: []
+		});
+		const continuation = capture ? await taskContext(capture.key, sessionId, normalizedUserContent, { capture }) : void 0;
 		const turnIdempotencyKey = options.turnIdempotencyKey === void 0 ? await deriveTurnIdempotencyKey({
 			projectScope: this.config.projectScope,
 			sessionId,
@@ -1205,8 +1219,9 @@ var TMCRAMemoryLifecycle = class {
 		const outcomes = await Promise.all(targets.map(async (target) => {
 			try {
 				const response = await this.client.recall(target.scopeName, {
-					query: normalizedUserContent,
-					evidence_mode: this.config.evidenceMode,
+					query: continuation?.query || normalizedUserContent,
+					evidence_mode: capture ? "raw" : this.config.evidenceMode,
+					recall_profile: "interactive",
 					max_windows: 8
 				});
 				return {
@@ -1232,13 +1247,48 @@ var TMCRAMemoryLifecycle = class {
 		});
 		const errors = outcomes.flatMap((outcome) => outcome.error === void 0 ? [] : [recallFailure(outcome.target.scopeName, outcome.error)]);
 		const receipts = outcomes.flatMap((outcome) => outcome.receipt ? [outcome.receipt] : []);
+		let systemContext = renderContext(sections);
+		if (capture) {
+			const dashboard = await memoryDashboard(capture.key, sessionId);
+			const layers = outcomes.map((outcome) => ({
+				scope: outcome.target.scopeName,
+				content: outcome.response ? promptEvidenceContent(outcome.response) : "",
+				status: outcome.error ? "failed" : "success",
+				queryId: outcome.response?.query_id,
+				sources: (outcome.response?.prompt_evidence)?.sources || []
+			}));
+			const selection = budgetEvidence(layers, {
+				budgetChars: dashboard.budgetChars,
+				visibleText: options.visibleContext || ""
+			});
+			const parts = [{
+				label: "Selected memory evidence",
+				content: selection.content
+			}];
+			if (continuation?.task) parts.unshift({
+				label: "Task handoff; historical work, verify before acting",
+				content: continuation.query
+			});
+			if (continuation && continuation.candidates.length > 1) parts.unshift({
+				label: "Multiple active tasks; ask which one to continue",
+				content: JSON.stringify(continuation.candidates)
+			});
+			systemContext = renderContext(parts.filter((part) => part.content));
+			await recordMemoryActivity(capture, {
+				kind: "recall",
+				query: continuation?.query || normalizedUserContent,
+				layers,
+				selection
+			});
+		}
 		if ((options.strictRecall ?? this.config.strictRecall) && errors.length > 0) throw new Error(`strict recall failed for ${errors.map((error) => error.scopeName).join(", ")}`);
 		return new PreparedTurn({
 			userContent: normalizedUserContent,
 			sessionId,
 			turnId,
 			turnIdempotencyKey,
-			systemContext: renderContext(sections),
+			systemContext,
+			capture,
 			recalledScopes: targets.map((target) => target.scopeName),
 			recallErrors: errors,
 			recallReceipts: receipts
@@ -1246,6 +1296,7 @@ var TMCRAMemoryLifecycle = class {
 	}
 	async commitTurn(prepared, assistantContent, options = {}) {
 		const normalizedAssistantContent = requiredText(assistantContent, "assistantContent");
+		if (prepared.capture && !await mayWrite(prepared.capture)) throw new Error("TMCRA write skipped: session memory mode changed");
 		const turnIdempotencyKey = options.turnIdempotencyKey === void 0 ? prepared.turnIdempotencyKey : validIdempotencyKey(options.turnIdempotencyKey);
 		if (turnIdempotencyKey !== prepared.turnIdempotencyKey) throw new Error("commitTurn turnIdempotencyKey does not match PreparedTurn");
 		const body = {
@@ -1264,6 +1315,7 @@ var TMCRAMemoryLifecycle = class {
 		};
 		const messageIds = body.messages.map((message) => message.message_id);
 		const pendingRecord = {
+			capture: prepared.capture,
 			version: 1,
 			idempotencyKey: turnIdempotencyKey,
 			scopeName: this.config.projectScope,
@@ -1276,12 +1328,24 @@ var TMCRAMemoryLifecycle = class {
 		if (this.config.pendingQueue) await this.config.pendingQueue.enqueue(pendingRecord);
 		let submitted;
 		try {
+			if (prepared.capture && !await mayWrite(prepared.capture)) {
+				await this.config.pendingQueue?.remove(turnIdempotencyKey);
+				throw new Error("TMCRA write skipped: session memory mode changed");
+			}
 			submitted = await this.client.ingest(this.config.projectScope, body, { idempotencyKey: turnIdempotencyKey });
 		} catch (error) {
 			if (this.config.pendingQueue) await this.config.pendingQueue.update(turnIdempotencyKey, { lastError: error instanceof Error ? error.message : String(error) });
 			throw error;
 		}
 		const initialReceipt = makeSubmittedIngestReceipt(this.config.projectScope, messageIds, submitted);
+		if (prepared.capture) {
+			await finishObservedTurn(prepared.capture, prepared.userContent, normalizedAssistantContent);
+			await recordMemoryActivity(prepared.capture, {
+				kind: "write",
+				state: submitted.status,
+				jobId: submitted.job_id
+			});
+		}
 		if (this.config.pendingQueue) await this.config.pendingQueue.update(turnIdempotencyKey, {
 			jobId: submitted.job_id,
 			statusUrl: submitted.status_url,
@@ -1353,6 +1417,24 @@ var TMCRAMemoryLifecycle = class {
 		const records = await this.config.pendingQueue.list();
 		const results = [];
 		for (const record of records) try {
+			if (!record.jobId && record.capture && !await mayWrite(record.capture)) {
+				await this.config.pendingQueue.remove(record.idempotencyKey);
+				results.push({
+					key: record.idempotencyKey,
+					status: "discarded",
+					final: true
+				});
+				continue;
+			}
+			if (!record.jobId && !record.capture && this.config.memoryControlKey && !await legacyWriteAllowed(this.config.memoryControlKey, { sessionId: record.sessionId })) {
+				await this.config.pendingQueue.remove(record.idempotencyKey);
+				results.push({
+					key: record.idempotencyKey,
+					status: "discarded",
+					final: true
+				});
+				continue;
+			}
 			let job;
 			if (record.jobId && this.client.getJob) job = await this.client.getJob(record.jobId);
 			else if (record.jobId) job = await this.client.waitForJob(record.jobId, {
@@ -1380,6 +1462,11 @@ var TMCRAMemoryLifecycle = class {
 				"failed",
 				"cancelled"
 			].includes(job.status);
+			if (record.capture) await recordMemoryActivity(record.capture, {
+				kind: "write",
+				jobId: job.job_id,
+				state: job.status
+			});
 			if (job.status === "succeeded") await this.config.pendingQueue.remove(record.idempotencyKey);
 			else await this.config.pendingQueue.update(record.idempotencyKey, {
 				observedStatus: job.status,
@@ -1405,185 +1492,6 @@ var TMCRAMemoryLifecycle = class {
 		return Object.freeze(results);
 	}
 };
-//#endregion
-//#region src/sdk/queue.ts
-async function nodeFileSystem() {
-	return await import("node:fs/promises");
-}
-async function nodePath() {
-	return await import("node:path");
-}
-/**
-* Small JSON-file queue. It is opt-in so browser consumers remain zero-runtime
-* dependency; Node consumers can point it at an application data directory.
-* Writes use a temporary file followed by rename for crash-safe replacement.
-*/
-var FilePendingTurnQueue = class {
-	writeChain = Promise.resolve();
-	filePath;
-	constructor(filePath) {
-		this.filePath = filePath;
-		if (!filePath.trim()) throw new TypeError("filePath is required");
-	}
-	async readState() {
-		const fs = await nodeFileSystem();
-		try {
-			const raw = await fs.readFile(this.filePath, "utf8");
-			const parsed = JSON.parse(raw);
-			if (parsed.version !== 1 || !parsed.records || typeof parsed.records !== "object") throw new Error("invalid TMCRA pending queue format");
-			return {
-				version: 1,
-				records: parsed.records
-			};
-		} catch (error) {
-			if (error instanceof Error && "code" in error && error.code === "ENOENT") return {
-				version: 1,
-				records: {}
-			};
-			throw error;
-		}
-	}
-	async writeState(state) {
-		const fs = await nodeFileSystem();
-		const path = await nodePath();
-		await fs.mkdir(path.dirname(this.filePath), { recursive: true });
-		const temporaryPath = `${this.filePath}.tmp-${processSafeRandom()}`;
-		await fs.writeFile(temporaryPath, `${JSON.stringify(state)}\n`, "utf8");
-		await fs.rename(temporaryPath, this.filePath);
-	}
-	async mutate(mutator) {
-		const operation = this.writeChain.then(async () => {
-			const state = await this.readState();
-			mutator(state);
-			await this.writeState(state);
-		});
-		this.writeChain = operation.catch(() => void 0);
-		return operation;
-	}
-	async enqueue(record) {
-		await this.mutate((state) => {
-			const current = state.records[record.idempotencyKey];
-			if (current && JSON.stringify(current.body) !== JSON.stringify(record.body)) throw new Error(`pending turn ${record.idempotencyKey} already exists with a different body`);
-			if (!current) state.records[record.idempotencyKey] = record;
-		});
-	}
-	async update(idempotencyKey, patch) {
-		await this.mutate((state) => {
-			const current = state.records[idempotencyKey];
-			if (!current) return;
-			state.records[idempotencyKey] = {
-				...current,
-				...patch,
-				updatedAt: Date.now()
-			};
-		});
-	}
-	async remove(idempotencyKey) {
-		await this.mutate((state) => {
-			delete state.records[idempotencyKey];
-		});
-	}
-	async list() {
-		await this.writeChain;
-		const state = await this.readState();
-		return Object.freeze(Object.values(state.records).map((record) => ({
-			...record,
-			body: {
-				...record.body,
-				messages: [...record.body.messages]
-			}
-		})));
-	}
-};
-function processSafeRandom() {
-	const webCrypto = globalThis.crypto;
-	if (webCrypto?.randomUUID) return webCrypto.randomUUID();
-	return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-}
-//#endregion
-//#region src/local-provider-config.ts
-const PROVIDERS = /* @__PURE__ */ new Set([
-	"deepseek",
-	"openai-compatible",
-	"local-openai-compatible"
-]);
-const MAX_TEXT_LENGTH = 512;
-const MAX_SECRET_LENGTH = 4096;
-function resolveLocalProviderConfigPath(value = process.env.TMCRA_LOCAL_PROVIDER_CONFIG) {
-	return resolve(value?.trim() || join(homedir(), ".config", "tmcra", "local-providers.json"));
-}
-function boundedText(value, field, maximum = MAX_TEXT_LENGTH) {
-	const normalized = String(value ?? "").trim();
-	if (!normalized || normalized.length > maximum || /[\r\n\0]/u.test(normalized)) throw new Error(`tmcra-memory: ${field} is invalid`);
-	return normalized;
-}
-function loopbackHost(hostname) {
-	return [
-		"localhost",
-		"127.0.0.1",
-		"::1",
-		"[::1]"
-	].includes(hostname.toLowerCase());
-}
-function providerBaseUrl(value, field) {
-	const normalized = boundedText(value, field, 2048);
-	let parsed;
-	try {
-		parsed = new URL(normalized);
-	} catch {
-		throw new Error(`tmcra-memory: ${field} must be a valid URL`);
-	}
-	if (parsed.username || parsed.password || parsed.search || parsed.hash) throw new Error(`tmcra-memory: ${field} contains unsupported URL components`);
-	if (parsed.protocol !== "https:" && !(parsed.protocol === "http:" && loopbackHost(parsed.hostname))) throw new Error(`tmcra-memory: ${field} must use HTTPS; loopback may use HTTP`);
-	return parsed.toString().replace(/\/+$/u, "");
-}
-function providerStage(value, field) {
-	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error(`tmcra-memory: ${field} must be an object`);
-	const input = value;
-	const provider = boundedText(input.provider, `${field} provider`);
-	if (!PROVIDERS.has(provider)) throw new Error(`tmcra-memory: ${field} provider is unsupported`);
-	const apiKey = String(input.apiKey ?? "").trim();
-	if (apiKey.length > MAX_SECRET_LENGTH || /[\r\n\0]/u.test(apiKey)) throw new Error(`tmcra-memory: ${field} API key is invalid`);
-	return {
-		provider,
-		baseUrl: providerBaseUrl(input.baseUrl, `${field} base URL`),
-		model: boundedText(input.model, `${field} model`),
-		...apiKey ? { apiKey } : {}
-	};
-}
-function validateStoredConfig(value) {
-	if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("tmcra-memory: local provider configuration must be an object");
-	const input = value;
-	if (input.schemaVersion !== 1 || input.execution !== "local") throw new Error("tmcra-memory: local provider configuration version is unsupported");
-	const writer = providerStage(input.writer, "writer");
-	if (!input.organizer || typeof input.organizer !== "object" || Array.isArray(input.organizer)) throw new Error("tmcra-memory: organizer configuration must be an object");
-	const organizerInput = input.organizer;
-	const organizer = organizerInput.inheritWriter !== false ? { inheritWriter: true } : {
-		inheritWriter: false,
-		...providerStage(organizerInput, "organizer")
-	};
-	const updatedAt = boundedText(input.updatedAt, "provider updatedAt", 64);
-	if (Number.isNaN(Date.parse(updatedAt))) throw new Error("tmcra-memory: provider updatedAt must be an ISO timestamp");
-	return {
-		schemaVersion: 1,
-		execution: "local",
-		writer,
-		organizer,
-		updatedAt
-	};
-}
-async function readLocalProviderConfig(path = resolveLocalProviderConfigPath()) {
-	if (!existsSync(path)) return null;
-	return validateStoredConfig(JSON.parse(await readFile(path, "utf8")));
-}
-function resolvedLocalProviderStage(config, stage) {
-	if (stage === "writer") return config.writer;
-	return config.organizer.inheritWriter ? config.writer : config.organizer;
-}
-function localProviderStageReady(config, stage) {
-	const target = resolvedLocalProviderStage(config, stage);
-	return Boolean(target.apiKey) || loopbackHost(new URL(target.baseUrl).hostname);
-}
 //#endregion
 //#region src/local-provider-executor.ts
 const TASK_SCHEMA_VERSION = "tmcra.user-provider-task.1";
@@ -1762,6 +1670,7 @@ async function providerCompletion(target, task, options = {}) {
 		}
 		let response;
 		try {
+			await assertCloudProvidersAllowed();
 			response = await (options.fetchImpl ?? fetch)(`${target.baseUrl}/chat/completions`, {
 				method: "POST",
 				headers: {
@@ -2209,6 +2118,8 @@ async function resolveCredential(ctx, reference) {
 	return cleanText(credentials === void 0 ? process.env[ref] : (await credentials.resolve(ref))?.value, reference);
 }
 async function resolveConnectionConfig(ctx, config) {
+	const local = await import("./full-local-config-Broj9mJX.mjs").then((module) => module.readFullLocalConfig());
+	if (local) return local;
 	const baseUrl = await resolveCredential(ctx, cleanText(config.baseUrlEnv, "baseUrlEnv") ?? DEFAULT_BASE_URL_ENV) ?? cleanText(config.baseUrl, "baseUrl") ?? DEFAULT_BASE_URL;
 	const apiKeyReference = cleanText(config.apiKeyEnv, "apiKeyEnv") ?? DEFAULT_API_KEY_ENV;
 	const apiKey = await resolveCredential(ctx, apiKeyReference);
@@ -2219,6 +2130,14 @@ async function resolveConnectionConfig(ctx, config) {
 	};
 }
 async function resolveOperationConfig(ctx, config) {
+	const local = await import("./full-local-config-Broj9mJX.mjs").then((module) => module.readFullLocalConfig());
+	if (local) return {
+		...local,
+		localProviderExecution: {
+			writer: false,
+			organizer: false
+		}
+	};
 	const connection = await resolveConnectionConfig(ctx, config);
 	const globalReference = cleanText(config.globalScopeEnv, "globalScopeEnv") ?? DEFAULT_GLOBAL_SCOPE_ENV;
 	const globalScope = cleanText(config.globalScope, "globalScope") ?? await resolveCredential(ctx, globalReference);
@@ -2257,12 +2176,14 @@ function lifecycleFor(config, operation, agent, projectScope, pendingQueue, stag
 	return new TMCRAMemoryLifecycle(new TMCRAClient({
 		baseUrl: operation.baseUrl,
 		apiKey: operation.apiKey,
+		fetch: memoryFetch(operation),
 		defaultTimeoutMs: stage === "recall" ? validatePositiveTimeout(config.recallTimeoutMs, 3e4, "recallTimeoutMs") : validatePositiveTimeout(config.ingestTimeoutMs, 3e4, "ingestTimeoutMs"),
 		clientPlatform: "deepseek_harness",
 		integrationId: "tmcra-deepseek-harness",
 		agentId: assistantAgentId,
 		localProviderExecution: operation.localProviderExecution
 	}), {
+		memoryControlKey: controlKey(operation, projectScope),
 		projectScope,
 		globalScope: operation.globalScope,
 		evidenceMode: config.evidenceMode ?? "auto",
@@ -2288,6 +2209,110 @@ function reportLocalProviderEvent(ctx, event) {
 }
 /** Register automatic TMCRA memory at native Harness lifecycle seams. */
 function apply(ctx, config) {
+	ctx.inject(["tools"], (toolCtx) => {
+		toolCtx.effect(() => toolCtx.tools.register({
+			name: "tmcra_memory_control",
+			description: "Inspect TMCRA memory or correct a remembered fact. When the user says you remembered something wrong, FIRST use correction_start to suspend this turn's automatic capture, then clarify exact sources and replacement if needed. feedback always asks the user inside the host chat before committing. Hypotheticals and quoted source text are not correction requests. Never work around a declined/unavailable confirmation with ingest or another tool.",
+			parameters: {
+				type: "object",
+				additionalProperties: false,
+				required: ["operation"],
+				properties: {
+					operation: {
+						type: "string",
+						enum: [
+							"dashboard",
+							"correction_start",
+							"feedback"
+						]
+					},
+					scope: { type: "string" },
+					action: {
+						type: "string",
+						enum: [
+							"correct",
+							"ignore",
+							"restore"
+						]
+					},
+					memory_ids: {
+						type: "array",
+						items: { type: "string" },
+						minItems: 1,
+						maxItems: 100
+					},
+					replacement: {
+						type: "string",
+						maxLength: 4e3
+					},
+					query_id: { type: "string" },
+					idempotency_key: {
+						type: "string",
+						minLength: 8,
+						maxLength: 200
+					}
+				}
+			},
+			output: {
+				schema: {
+					type: "object",
+					additionalProperties: true
+				},
+				render: (_args, value) => [{
+					type: "text",
+					text: JSON.stringify(value)
+				}]
+			},
+			async execute(input, exec) {
+				if (!exec.agent) throw new Error("An active host conversation is required");
+				const args = input;
+				if (![
+					"dashboard",
+					"correction_start",
+					"feedback"
+				].includes(String(args.operation))) throw new Error("Unknown memory operation");
+				const connection = await resolveOperationConfig(ctx, config);
+				const scope = cleanText(config.projectScope, "projectScope") ? validateScope(config.projectScope, "projectScope") : deriveProjectScope(connection.projectScopePrefix, exec.agent, config.projectId);
+				return await createMemoryActions({
+					config: connection,
+					scope,
+					globalScope: connection.globalScope,
+					sessionId: String(exec.agent.session.header.id),
+					confirmFeedback: async (reason) => {
+						const approval = toolCtx.get("approval");
+						if (!approval) return "confirmation_unavailable";
+						const outcome = await approval.request({
+							agent: exec.agent,
+							toolName: exec.name,
+							callId: exec.callId,
+							reason,
+							signal: AbortSignal.any([exec.signal, AbortSignal.timeout(12e4)])
+						});
+						return outcome === "allowed-once" ? "accepted" : outcome;
+					},
+					request: async (path, options) => {
+						const provider = await readLocalProviderConfig().catch(() => null);
+						const headers = {};
+						for (const stage of ["writer", "organizer"]) if (provider && localProviderStageReady(provider, stage)) headers[stage === "writer" ? "X-TMCRA-Writer-Execution" : "X-TMCRA-Organizer-Execution"] = "user-provider";
+						const response = await fetch(`${connection.baseUrl.replace(/\/+$/u, "")}${path}`, {
+							method: options.method,
+							headers: {
+								Authorization: `Bearer ${connection.apiKey}`,
+								"Content-Type": "application/json",
+								...headers,
+								...options.headers
+							},
+							body: options.body === void 0 ? void 0 : JSON.stringify(options.body),
+							signal: AbortSignal.any([exec.signal, AbortSignal.timeout(3e4)]),
+							redirect: "error"
+						});
+						if (!response.ok) throw new Error(`TMCRA request failed (${response.status})`);
+						return response.json();
+					}
+				})(String(args.operation), args);
+			}
+		}));
+	});
 	validatePositiveTimeout(config.recallTimeoutMs, 3e4, "recallTimeoutMs");
 	validatePositiveTimeout(config.ingestTimeoutMs, 3e4, "ingestTimeoutMs");
 	const preparedByAgentTurn = /* @__PURE__ */ new Map();
@@ -2311,6 +2336,7 @@ function apply(ctx, config) {
 				return new TMCRAClient({
 					baseUrl: connection.baseUrl,
 					apiKey: connection.apiKey,
+					fetch: memoryFetch(connection),
 					defaultTimeoutMs: validatePositiveTimeout(config.ingestTimeoutMs, 3e4, "ingestTimeoutMs"),
 					clientPlatform: "deepseek_harness",
 					integrationId: "tmcra-deepseek-harness"
@@ -2335,7 +2361,7 @@ function apply(ctx, config) {
 			waitForJob: { timeoutMs: validatePositiveTimeout(config.ingestTimeoutMs, 3e4, "ingestTimeoutMs") }
 		});
 		for (const result of results) {
-			if (result.status === "succeeded") continue;
+			if (result.status === "succeeded" || result.status === "discarded") continue;
 			warn(ctx, "ingest", /* @__PURE__ */ new Error(`pending turn ${result.key} remains ${result.status}${result.error ? `: ${result.error}` : ""}`));
 		}
 	};
@@ -2352,7 +2378,8 @@ function apply(ctx, config) {
 			await reconcilePending(agent, operation, projectScope);
 			const prepared = await lifecycleFor(config, operation, agent, projectScope, pendingQueue, "recall").prepareTurn(prompt, {
 				sessionId: String(agent.session.header.id),
-				turnId: String(turn)
+				turnId: String(turn),
+				visibleContext: downstream.messages.map((message) => blocksToText(message.content)).join("\n")
 			});
 			preparedByAgentTurn.set(key, {
 				prepared,
@@ -2385,7 +2412,9 @@ function apply(ctx, config) {
 		const projectScope = state.projectScope;
 		const writeback = (writebackByProject.get(projectScope) ?? Promise.resolve()).catch(() => void 0).then(async () => {
 			try {
-				await lifecycleFor(config, await resolveOperationConfig(ctx, config), state.agent, state.projectScope, pendingQueue, "ingest").commitTurn(state.prepared, redactSensitiveText(answer));
+				const operation = await resolveOperationConfig(ctx, config);
+				if (state.prepared.capture && !await mayWrite(state.prepared.capture)) return;
+				await lifecycleFor(config, operation, state.agent, state.projectScope, pendingQueue, "ingest").commitTurn(state.prepared, redactSensitiveText(answer));
 			} catch (error) {
 				warn(ctx, "ingest", error);
 			}

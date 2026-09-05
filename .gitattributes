@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.tgz binary
+*.pt binary
+runtime/** linguist-vendored -whitespace

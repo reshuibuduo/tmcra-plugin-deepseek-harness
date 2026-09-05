@@ -20,6 +20,14 @@ Agent 回答前，TMCRA 会找回与当前问题有关的用户要求、决策�
 
 ## 已实现能力
 
+1.0.0-rc.1 新增任务接续、会话模式、完整证据块预算和本机记忆控制台。使用 `dsh-tmcra-memory memory --scope <当前项目的精确scope> --session <当前会话ID>` 打开面板；可管理任务、查看来源、纠错、忽略或恢复。三种模式为 `normal`、`recall_only`、`off`。关闭期间的内容不会在恢复后补写；已提交的远端任务保持原状态。有效纠错需要服务端反馈接口同步更新，线上服务须单独升级验收。
+
+工作台现已集成 Writer / 后台整理 API 配置、个人知识库和知识图谱。模型密钥只在本机表单输入并保存在受保护文件中，读取配置仅返回是否已保存；测试使用虚构 JSON 推理样本。知识与图谱分别读取已有服务接口，支持范围切换、搜索、节点选择及原始证据追溯。
+
+在支持工具与原生 ApprovalService 的 DSH 中，`tmcra_memory_control` 会对真实的记忆纠错请求先暂停该回合的自动写入，然后在聊天内展示来源、拟修改内容和范围，请用户确认。拒绝、取消或无确认渠道均不提交；已标识的其他正常回合不受影响。语义识别由宿主 Agent 按工具说明完成，假设性讨论不构成修改授权。此流程已通过 DSH 0.1.1-rc.2 原生工具/确认服务的隔离测试。
+
+预算默认 12000 字符；仅在证据仍位于实际模型上下文时跨轮去重。任务状态按凭据指纹和项目隔离；多个本机适配器可使用同一个 `TMCRA_MEMORY_STATE_DIR`。不同登录凭据的本机任务独立，已提交的长期记忆通过相同服务端项目 scope 共享。
+
 - 同一个项目可以在 Codex、DeepSeek Harness 等 TMCRA 接入工具之间继续推进。
 - 每轮第一次模型请求前自动召回，无需 Agent 主动调用工具。
 - 新开一个 Harness 对话后，可以继续同一项目的工作进度。
@@ -61,7 +69,7 @@ Agent 回答前，TMCRA 会找回与当前问题有关的用户要求、决策�
 ## 安装技术预览包
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.7/dsh-tmcra-memory-0.1.7.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v1.0.0-rc.1/dsh-tmcra-memory-1.0.0-rc.1.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
@@ -69,9 +77,9 @@ dsh web
 
 Harness Web UI 默认地址为 `http://127.0.0.1:3080`。
 
-压缩包内含 `cordis.patch.yml`，安装后会自动加入指定 Profile 的配置层。建议使用 Release 中已经构建好的 `.tgz`。下载到本地后，也可以执行 `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.7.tgz`。从 Git 源码安装可能还需要在 `pnpm` 中单独允许构建脚本。
+压缩包内含 `cordis.patch.yml`，安装后会自动加入指定 Profile 的配置层。建议使用 Release 中已经构建好的 `.tgz`。下载到本地后，也可以执行 `dsh plugin --profile web add ./dsh-tmcra-memory-1.0.0-rc.1.tgz`。从 Git 源码安装可能还需要在 `pnpm` 中单独允许构建脚本。
 
-DSH `0.1.1-rc.2` 的 Windows 版仍可能把包含空格或非 ASCII 字符的本地包路径错误重组。请先把压缩包复制到纯 ASCII 短路径，例如 `D:\\dsh-packages\\dsh-tmcra-memory-0.1.7.tgz`；上面的 Release URL 不受影响。
+DSH `0.1.1-rc.2` 的 Windows 版仍可能把包含空格或非 ASCII 字符的本地包路径错误重组。请先把压缩包复制到纯 ASCII 短路径，例如 `D:\\dsh-packages\\dsh-tmcra-memory-1.0.0-rc.1.tgz`；上面的 Release URL 不受影响。
 
 ## 连接 TMCRA 账号
 
@@ -93,6 +101,14 @@ dsh plugin --profile web exec dsh-tmcra-memory logout
 Harness 不会把凭据值写入普通设置或模型请求。如果模型控制的工具和 Harness 使用同一个系统用户，它仍可能读取该系统用户有权访问的本地文件，因此只应在可信本地账号中保留连接。
 
 ## 配置本地 Writer 与后台整理模型
+
+### 完整本地部署预览
+
+插件包内置完整后端，提供 E5/MiniLM、BGE-M3/BGE reranker、Qwen3 embedding/reranker 三档。装入 DSH 后运行 `dsh-tmcra-memory local-install`，免登录打开安装页并选择档位。Python、依赖和校验后的模型自动准备，本机身份自动生成，重启 DSH 后自动发现连接。支持 Windows x64，无需预装 Python、TMCRA 账号或 TMCRA 服务器。首次下载需要联网。原云端凭据保留；本地选择生效后，旧云端连接和后台云模型请求会被拦截，安装失败也保持本地选择。高级用户应先清除显式 `TMCRA_CONFIG_FILE` 覆盖。
+
+CPU 合成写入和原文召回已通过；复杂编译超时，后台整理和完整重启恢复仍待验收。轻量启动需约 6.3GiB 空闲内存。详见[验收说明](https://github.com/reshuibuduo/tmcra/blob/v1.0.0-rc.1/docs/LOCAL_DEPLOYMENT_PREVIEW.zh-CN.md)。宿主主模型在云端时，召回证据仍可能由宿主发往云端。
+
+### 配置独立模型 API
 
 安装后执行：
 

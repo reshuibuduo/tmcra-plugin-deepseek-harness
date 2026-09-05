@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { readFullLocalConfig } from "./full-local-config.js";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join, resolve } from "node:path";
@@ -115,6 +116,7 @@ function validateStoredConfig(value: unknown): LocalProviderConfig {
 export async function readLocalProviderConfig(
   path = resolveLocalProviderConfigPath(),
 ): Promise<LocalProviderConfig | null> {
+  if (await readFullLocalConfig()) return null;
   if (!existsSync(path)) return null;
   return validateStoredConfig(JSON.parse(await readFile(path, "utf8")) as unknown);
 }

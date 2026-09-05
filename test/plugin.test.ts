@@ -5,6 +5,8 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { Context } from "@deepseek-ai/cordis";
 import AgentLoop from "@deepseek-ai/dsh-agent-loop";
+import ApprovalService from "@deepseek-ai/dsh-user-approval";
+import { CallId } from "@deepseek-ai/dsh-llm";
 import { mountAgentLoopTestDependencies } from "@deepseek-ai/dsh-agent-loop-testkit";
 import {
   createUserMessage,
@@ -48,6 +50,7 @@ function textResponse(text: string): StreamChunk[] {
 
 class RecordingAdapter extends LlmAdapter {
   readonly requests: GenerateOptions[] = [];
+  beforeAnswer?: () => Promise<void>;
 
   constructor(private readonly answers: string[]) {
     super();
@@ -55,6 +58,7 @@ class RecordingAdapter extends LlmAdapter {
 
   async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     this.requests.push(options);
+    await this.beforeAnswer?.();
     const answer = this.answers.shift();
     if (answer === undefined) throw new Error("test adapter script exhausted");
     for (const chunk of textResponse(answer)) yield chunk;
@@ -130,6 +134,9 @@ async function startMemoryServer(options: { failRecall?: boolean; failIngest?: b
         body,
       });
       const recallMatch = url.pathname.match(/^\/v1\/scopes\/([^/]+)\/recall$/);
+      if (url.pathname.endsWith('/feedback')) return responseJson(response, 201, { effective:true, correction_index_status:'pending' });
+      const sourceMatch = url.pathname.match(/^\/v1\/scopes\/([^/]+)\/memory-graph\/nodes\/([^/]+)\/evidence$/);
+      if (sourceMatch) return responseJson(response, 200, {scope_name:decodeURIComponent(sourceMatch[1]!),memory_id:decodeURIComponent(sourceMatch[2]!),items:[{text:'Old source fact'}],page:{has_more:false}});
       if (recallMatch) {
         if (options.failRecall) return responseJson(response, 503, { detail: "recall unavailable" });
         const scope = decodeURIComponent(recallMatch[1]!);
@@ -184,6 +191,7 @@ async function testContext(server: MockMemoryServer, adapter: RecordingAdapter, 
   context.llm.registerAdapter(["mock"], adapter);
   const directory = await mkdtemp(join(tmpdir(), "tmcra-dsh-plugin-"));
   temporaryDirectories.push(directory);
+  process.env.TMCRA_MEMORY_STATE_DIR = join(directory, 'memory-controls');
   process.env.TMCRA_TEST_KEY = "test-token";
   process.env.TMCRA_TEST_GLOBAL = "test-global";
   process.env.TMCRA_TEST_PROJECT_PREFIX = "test-project";
@@ -215,6 +223,26 @@ function messageText(options: GenerateOptions): string {
 }
 
 describe("TMCRA DeepSeek Harness plugin", () => {
+  it.each(['allowed-once', 'rejected', 'cancelled', 'unavailable'] as const)('requires native chat confirmation: %s', async outcome => {
+    const server=await startMemoryServer();const adapter=new RecordingAdapter(['Correction discussion complete.']);
+    const {context}=await testContext(server,adapter,{projectScope:'test-correction-project',globalScope:'test-global'});
+    if(!context.get('approval')) await context.plugin(ApprovalService,{});
+    let asked=0;
+    context.on('approval/request',async req=>{asked++;expect(req.reason).toContain('Old source fact');expect(req.reason).toContain('New correct fact');expect(server.calls.filter(c=>c.path.endsWith('/feedback'))).toHaveLength(0);return outcome;});
+    try {
+      const agent=context.agentLoop.create(SessionId('native-correction-'+outcome),{provider:'mock',model:'mock'});
+      adapter.beforeAnswer=async()=>{
+        expect(context.tools.get('tmcra_memory_control')).toBeDefined();
+        const result=await context.tools.execute({callId:CallId('correction-'+outcome),name:'tmcra_memory_control',agent,signal:new AbortController().signal,
+          arguments:{operation:'feedback',action:'correct',memory_ids:['source-a'],replacement:'New correct fact',idempotency_key:'native-correction-one'}});
+        expect(result.isError,JSON.stringify(result)).toBe(false);
+      };
+      send(agent,'You remembered this wrong. Correct the old fact.');await agent.whenIdle();await context.fiber.dispose();
+      expect(asked).toBe(1);
+      expect(server.calls.filter(c=>c.path.endsWith('/feedback'))).toHaveLength(outcome==='allowed-once'?1:0);
+      expect(server.calls.filter(c=>c.path.endsWith('/ingest'))).toHaveLength(0);
+    }finally{await context.fiber.dispose();await server.close();}
+  });
   it("injects recall into the real Harness model request and writes USER/AGENT separately", async () => {
     const server = await startMemoryServer();
     const adapter = new RecordingAdapter(["First answer: parser plan is complete.", "Second answer: continuing implementation."]);

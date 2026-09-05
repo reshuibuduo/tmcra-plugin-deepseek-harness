@@ -20,6 +20,8 @@ Cross-app continuity applies to memories that have reached TMCRA and requires bo
 
 ## What it does
 
+Development branch adds a local memory control panel: `dsh-tmcra-memory memory --scope EXACT_PROJECT_SCOPE --session EXACT_SESSION_ID`. It offers tasks, source corrections, ignore/restore, normal/recall-only/off modes, and a 12000-character default recall budget. Disabled periods are never automatically backfilled; already submitted remote work is retained. Effective corrections require the corresponding backend update. New features are not yet published.
+
 - Continues one project across TMCRA-connected tools such as Codex and DeepSeek Harness.
 - Recalls user-global and current-project memory before the first model request of each turn.
 - Continues project work across separate Harness conversations.
@@ -61,7 +63,7 @@ During the initial release period, TMCRA accounts are free to use with no memory
 ## Install the preview tarball
 
 ```bash
-dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v0.1.7/dsh-tmcra-memory-0.1.7.tgz
+dsh plugin --profile web add https://github.com/reshuibuduo/tmcra-plugin-deepseek-harness/releases/download/v1.0.0-rc.1/dsh-tmcra-memory-1.0.0-rc.1.tgz
 dsh plugin --profile web exec dsh-tmcra-memory login
 dsh --profile web --dump-config
 dsh web
@@ -69,9 +71,9 @@ dsh web
 
 Harness serves its Web UI at `http://127.0.0.1:3080` by default.
 
-The package contributes `cordis.patch.yml`, so the install command activates the plugin in the selected profile. Prefer the prebuilt release tarball. A locally downloaded copy can also be installed with `dsh plugin --profile web add ./dsh-tmcra-memory-0.1.7.tgz`. Installing from a Git source may require an explicit `pnpm` build-script allowance.
+The package contributes `cordis.patch.yml`, so the install command activates the plugin in the selected profile. Prefer the prebuilt release tarball. A locally downloaded copy can also be installed with `dsh plugin --profile web add ./dsh-tmcra-memory-1.0.0-rc.1.tgz`. Installing from a Git source may require an explicit `pnpm` build-script allowance.
 
-DSH `0.1.1-rc.2` on Windows can still re-anchor a local package path incorrectly when the path contains spaces or non-ASCII characters. Copy the tarball to a short ASCII path first, such as `D:\\dsh-packages\\dsh-tmcra-memory-0.1.7.tgz`. The release URL above is not affected.
+DSH `0.1.1-rc.2` on Windows can still re-anchor a local package path incorrectly when the path contains spaces or non-ASCII characters. Copy the tarball to a short ASCII path first, such as `D:\\dsh-packages\\dsh-tmcra-memory-1.0.0-rc.1.tgz`. The release URL above is not affected.
 
 ## Connect your TMCRA account
 
@@ -93,6 +95,14 @@ dsh plugin --profile web exec dsh-tmcra-memory logout
 Harness keeps credential values out of settings and model requests. A model-operated tool running as the same operating-system user may still read files that user can read, so the connection should remain tied to a trusted local account.
 
 ## Configure local Writer and organizer providers
+
+### Full-local Windows preview
+
+The package includes the full backend and E5/MiniLM, BGE-M3/BGE reranker, and Qwen3 embedding/reranker profiles. After installing the DSH plugin, run `dsh-tmcra-memory local-install` and choose a profile on the installation page. This entry requires no TMCRA login. Python, dependencies and verified model files are prepared automatically, with a private local identity discovered by DSH after restart. Windows x64 is supported; preinstalled Python and TMCRA servers/accounts are unnecessary. First-time downloads require internet. Existing cloud credentials are retained; stale cloud memory connections and background cloud model requests are blocked after local selection. Failed setup retains local selection. Clear an advanced `TMCRA_CONFIG_FILE` override before automatic setup.
+
+CPU ingest/raw recall passed a synthetic test. Complex compilation timed out; organizer and full-service restart acceptance remains pending. Lightweight startup requires approximately 6.3 GiB free memory. See the [acceptance record](https://github.com/reshuibuduo/tmcra/blob/v1.0.0-rc.1/docs/LOCAL_DEPLOYMENT_PREVIEW.zh-CN.md). A host configured with a cloud main model can still send recalled evidence to its own provider.
+
+### Separate provider APIs
 
 Open the local setup page after installing the plugin:
 

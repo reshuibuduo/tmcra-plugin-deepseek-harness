@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { assertCloudProvidersAllowed } from "../scripts/local_binding.mjs";
 import type { FetchLike, RequestOptions } from "./sdk/client.ts";
 import type {
   JsonValue,
@@ -269,6 +270,7 @@ async function providerCompletion(
     }
     let response: Response;
     try {
+      await assertCloudProvidersAllowed();
       response = await (options.fetchImpl ?? fetch)(`${target.baseUrl}/chat/completions`, {
         method: "POST",
         headers: {

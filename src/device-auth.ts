@@ -1,4 +1,5 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { readFullLocalConfig } from "./full-local-config.js";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { chmod, mkdir, readFile, rm, stat } from "node:fs/promises";
@@ -90,7 +91,7 @@ async function postJson(fetchImpl: FetchLike, url: string, body: Record<string, 
       headers: {
         Accept: "application/json",
         "Content-Type": "application/json",
-        "User-Agent": "dsh-tmcra-memory/0.1.7",
+        "User-Agent": "dsh-tmcra-memory/1.0.0-rc.1",
       },
       body: JSON.stringify(body),
       signal: controller.signal,
@@ -214,6 +215,9 @@ export async function updateHarnessCredentials(
 }
 
 export async function readHarnessCredentialStatus(dshHome?: string) {
+  const local = await readFullLocalConfig();
+  if (local) return { configured: true, credentialsPath: "private-local-installation",
+    apiBaseUrl: local.baseUrl, globalScope: local.globalScope, projectScopePrefix: local.projectScopePrefix, deploymentMode: "local" };
   const path = credentialsPath(dshHome);
   if (!existsSync(path)) return { configured: false, credentialsPath: path };
   await assertOwnerOnly(path);
@@ -226,6 +230,21 @@ export async function readHarnessCredentialStatus(dshHome?: string) {
     globalScope: value[CREDENTIAL_KEYS.globalScope] || null,
     projectScopePrefix: value[CREDENTIAL_KEYS.projectScopePrefix] || null,
   };
+}
+
+/** Local control-panel transport only. Never print this object or send it to a model. */
+export async function readHarnessMemoryConnection(dshHome?: string) {
+  const local = await readFullLocalConfig();
+  if (local) return local;
+  const path = credentialsPath(dshHome);
+  await assertOwnerOnly(path);
+  const values = existsSync(path) ? credentialsDocument(await readFile(path, "utf8")).toJS() as Record<string, string> : {};
+  const apiKey = process.env.TMCRA_API_KEY || values[CREDENTIAL_KEYS.apiKey];
+  const baseUrl = process.env.TMCRA_API_BASE_URL || values[CREDENTIAL_KEYS.apiBaseUrl] || "https://api.tmcra.com";
+  const url = new URL(baseUrl);
+  if (url.protocol !== "https:" || url.username || url.password || url.search || url.hash) throw new Error("TMCRA memory API must be an HTTPS origin");
+  if (!apiKey) throw new Error("Sign in with dsh-tmcra-memory login first");
+  return { apiKey, baseUrl, globalScope: process.env.TMCRA_GLOBAL_SCOPE || values[CREDENTIAL_KEYS.globalScope] };
 }
 
 async function atomicPending(path: string, value: PendingDelivery) {
@@ -320,7 +339,7 @@ export async function authorizeDeepSeekHarness(options: DeviceAuthOptions = {}) 
   const started = await postJson(fetchImpl, `${authBaseUrl}/api/device/v1/authorizations`, {
     clientId: CLIENT_ID,
     clientName: `DeepSeek Harness (${platform()} ${process.arch})`,
-    clientVersion: "0.1.7",
+    clientVersion: "1.0.0-rc.1",
     codeChallenge: challenge,
     codeChallengeMethod: "S256",
   });
